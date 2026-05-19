@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nano-vLLM · Ch01 · What Is LLM Inference?</title>
+<meta name="description" content="A beginner-friendly deep dive into LLM inference — tokens, autoregressive generation, Q/K/V attention, HBM vs SRAM, and the 3 core bottlenecks.">
+<meta property="og:title" content="nano-vLLM Ch01 — What Is LLM Inference?">
+<meta property="og:description" content="Everything that happens between you typing a question and seeing the answer — explained from zero, step by step.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ── */
+:root {
+  --bg:      #08090d;
+  --surface: #0f1117;
+  --surface2:#161a24;
+  --border:  #1e2535;
+  --accent:  #00e5ff;
+  --accent2: #ff4d6d;
+  --accent3: #b4ff6f;
+  --accent4: #ffb347;
+  --text:    #e2e8f4;
+  --muted:   #6b7a99;
+  --code-bg: #0a0e1a;
+  --ch-accent: var(--accent); /* chapter dominant colour */
+}
+
+/* ── RESET ── */
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden;}
+
+/* ── SCAN LINES ── */
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9999;}
+
+/* ── NAV ── */
+.top-nav{position:sticky;top:0;z-index:100;background:rgba(8,9,13,0.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 1.5rem;display:flex;gap:0;overflow-x:auto;scrollbar-width:none;}
+.top-nav::-webkit-scrollbar{display:none;}
+.top-nav a{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:0.85rem 0.9rem;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.2s;}
+.top-nav a:hover{color:var(--accent);}
+.top-nav a.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+/* ── HERO ── */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:4rem 2rem;position:relative;overflow:hidden;}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(0,229,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.04) 1px,transparent 1px);background-size:60px 60px;animation:gridDrift 20s linear infinite;}
+@keyframes gridDrift{from{transform:translate(0,0);}to{transform:translate(60px,60px);}}
+.hero-glow{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(0,229,255,0.08) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 6s ease-in-out infinite;}
+@keyframes glowPulse{0%,100%{opacity:0.6;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.12);}}
+.series-badge{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;color:var(--accent);border:1px solid rgba(0,229,255,0.3);padding:0.3rem 1rem;border-radius:2px;background:rgba(0,229,255,0.05);text-transform:uppercase;position:relative;z-index:1;animation:fadeUp 0.6s ease both;}
+.chapter-num{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(5rem,15vw,10rem);line-height:1;color:var(--accent);opacity:0.15;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.05s both;letter-spacing:-0.05em;}
+.hero h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(2rem,5vw,3.5rem);line-height:1.1;letter-spacing:-0.02em;margin-top:-0.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.1s both;}
+.hero-sub{font-size:1rem;font-weight:300;color:var(--muted);max-width:560px;margin:1rem auto 2.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.15s both;}
+.hero-nav{display:flex;gap:1rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.2s both;}
+.hero-nav a{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;transition:all 0.2s;}
+.btn-primary{background:var(--accent);color:#000;font-weight:700;}
+.btn-primary:hover{background:#00c8e0;}
+.btn-ghost{border:1px solid var(--border);color:var(--muted);}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── MAIN ── */
+main{max-width:900px;margin:0 auto;padding:4rem 2rem 6rem;}
+
+/* ── SECTION ── */
+.section{margin-bottom:5rem;}
+.section-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--ch-accent);text-transform:uppercase;margin-bottom:0.6rem;}
+.section h2{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(1.6rem,3.5vw,2.4rem);line-height:1.1;margin-bottom:1.25rem;letter-spacing:-0.02em;}
+.section h3{font-family:'Syne',sans-serif;font-weight:700;font-size:1.15rem;margin:2.5rem 0 0.75rem;}
+.lead{font-size:0.95rem;color:var(--muted);max-width:720px;margin-bottom:1.75rem;line-height:1.85;}
+
+/* ── DIVIDER ── */
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:3.5rem 0;}
+
+/* ── CALLOUT ── */
+.callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.88rem;line-height:1.8;}
+.callout strong{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+.callout.info{border-color:var(--accent);background:rgba(0,229,255,0.05);}
+.callout.info strong{color:var(--accent);}
+.callout.warn{border-color:var(--accent4);background:rgba(255,179,71,0.05);}
+.callout.warn strong{color:var(--accent4);}
+.callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.05);}
+.callout.insight strong{color:var(--accent3);}
+
+/* ── CODE ── */
+.code-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);padding:0.2rem 0.6rem;border-radius:2px;display:inline-block;margin-bottom:0.5rem;}
+pre{background:var(--code-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:4px;padding:1.5rem;overflow-x:auto;font-family:'Space Mono',monospace;font-size:0.76rem;line-height:1.85;color:#c9d6ef;margin:0.5rem 0 1.5rem;}
+pre .comment{color:#3d4f6b;font-style:italic;}
+pre .keyword{color:var(--accent2);}
+pre .string{color:var(--accent3);}
+pre .num{color:var(--accent4);}
+pre .fn{color:var(--accent);}
+pre .cls{color:#c792ea;}
+code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,255,0.07);border:1px solid rgba(0,229,255,0.15);padding:0.1em 0.4em;border-radius:3px;color:var(--accent);}
+
+/* ── CARDS ── */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1.25rem;margin:1.5rem 0;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;transition:border-color 0.25s,transform 0.25s;}
+.card:hover{border-color:var(--card-accent,var(--accent));transform:translateY(-3px);}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--card-accent,var(--accent));}
+.card h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.5rem;}
+.card p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── DIAGRAM ── */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2rem;margin:1.5rem 0;position:relative;}
+.diagram-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);position:absolute;top:1rem;right:1.25rem;}
+
+/* ── TOKENS ── */
+.token-bar{display:flex;gap:5px;flex-wrap:wrap;margin:0.75rem 0;}
+.token{font-family:'Space Mono',monospace;font-size:0.7rem;padding:0.3rem 0.65rem;border-radius:3px;border:1px solid;cursor:default;transition:all 0.2s;}
+.token:hover{transform:translateY(-2px);}
+.token.prompt{background:rgba(0,229,255,0.08);border-color:rgba(0,229,255,0.3);color:var(--accent);}
+.token.gen{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.token.cached{background:rgba(180,255,111,0.08);border-color:rgba(180,255,111,0.3);color:var(--accent3);}
+
+/* ── PHASE COMPARE ── */
+.phase-compare{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin:1.5rem 0;}
+.phase-box{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;}
+.phase-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--phase-color,var(--accent));}
+.phase-tag{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--phase-color,var(--accent));display:block;margin-bottom:0.6rem;}
+.phase-box h4{font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;margin-bottom:0.9rem;}
+.phase-box ul{list-style:none;display:flex;flex-direction:column;gap:0.45rem;}
+.phase-box li{font-size:0.82rem;color:var(--muted);padding-left:1.1rem;position:relative;line-height:1.6;}
+.phase-box li::before{content:'→';position:absolute;left:0;color:var(--phase-color,var(--accent));font-size:0.72rem;}
+
+/* ── STEP CARDS ── */
+.step-row{display:flex;gap:1rem;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.step-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.68rem;font-weight:700;flex-shrink:0;}
+.step-row h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.9rem;margin-bottom:0.3rem;}
+.step-row p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── QUIZ ── */
+.quiz-block{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;margin-bottom:1.25rem;}
+.quiz-block .q{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.9rem;}
+.quiz-opts{display:flex;flex-direction:column;gap:0.5rem;}
+.quiz-opts button{text-align:left;padding:0.6rem 1rem;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:0.85rem;line-height:1.5;transition:all 0.15s;}
+.quiz-opts button:hover:not(:disabled){border-color:var(--muted);color:var(--text);}
+.quiz-opts button.correct{background:rgba(180,255,111,0.1);border-color:rgba(180,255,111,0.4);color:var(--accent3);}
+.quiz-opts button.wrong{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.quiz-fb{display:none;margin-top:0.75rem;padding:0.75rem 1rem;border-radius:3px;font-size:0.82rem;line-height:1.7;}
+.quiz-fb.show{display:block;}
+.quiz-fb.ok{background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.2);color:var(--accent3);}
+.quiz-fb.no{background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);}
+
+/* ── TAKEAWAYS ── */
+.takeaways{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1.75rem;}
+.takeaways-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);margin-bottom:1.25rem;}
+.takeaway-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.85rem;}
+.takeaway-item{display:flex;gap:0.75rem;align-items:flex-start;}
+.takeaway-check{width:18px;height:18px;border-radius:2px;background:rgba(0,229,255,0.15);border:1px solid rgba(0,229,255,0.4);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:3px;font-size:0.6rem;color:var(--accent);font-weight:700;}
+.takeaway-item p{font-size:0.82rem;color:var(--muted);line-height:1.65;}
+.takeaway-item strong{color:var(--text);}
+
+/* ── XREF ── */
+.xref{font-family:'Space Mono',monospace;font-size:0.65rem;color:rgba(0,229,255,0.6);border:1px solid rgba(0,229,255,0.2);padding:0 0.3rem;border-radius:2px;margin-left:0.25rem;}
+
+/* ── MISCONCEPTIONS ── */
+.misconception{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:0 4px 4px 0;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.misconception .myth{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;color:var(--accent2);text-transform:uppercase;margin-bottom:0.3rem;}
+.misconception .reality{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+.misconception .reality strong{color:var(--text);}
+
+/* ── BUTTONS ── */
+.btn{font-family:'Space Mono',monospace;font-size:0.68rem;letter-spacing:0.08em;padding:0.5rem 1.1rem;border-radius:3px;cursor:pointer;transition:all 0.2s;text-transform:uppercase;}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--muted);}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent);}
+.btn-cyan{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.btn-cyan:hover{background:var(--accent);color:#000;}
+
+/* ── FOOTER NAV ── */
+.chapter-footer{border-top:1px solid var(--border);margin-top:5rem;padding:2.5rem 2rem;text-align:center;}
+.footer-nav{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin-bottom:1.25rem;}
+.footer-credit{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);letter-spacing:0.08em;}
+.footer-credit a{color:var(--accent);text-decoration:none;}
+
+/* ── BANDWIDTH BARS ── */
+.bw-row{margin-bottom:0.6rem;}
+.bw-header{display:flex;justify-content:space-between;font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--muted);margin-bottom:0.3rem;}
+.bw-track{background:var(--surface2);border-radius:3px;height:18px;overflow:hidden;border:1px solid var(--border);}
+.bw-fill{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:6px;font-family:'Space Mono',monospace;font-size:0.6rem;font-weight:700;color:#000;}
+
+/* ── RESPONSIVE ── */
+@media(max-width:640px){
+  .phase-compare{grid-template-columns:1fr;}
+  .takeaway-grid{grid-template-columns:1fr;}
+  .hero-nav{flex-wrap:wrap;justify-content:center;}
+  .card-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav class="top-nav">
+  <a href="index.html">Index</a>
+  <a href="ch01.html" class="active">01 · Inference</a>
+  <a href="ch02.html">02 · Architecture</a>
+  <a href="ch03.html">03 · KV Cache</a>
+  <a href="ch04.html">04 · PagedAttention</a>
+  <a href="ch05.html">05 · Scheduler</a>
+  <a href="ch06.html">06 · Prefill vs Decode</a>
+  <a href="ch07.html">07 · Prefix Caching</a>
+  <a href="ch08.html">08 · Sampling</a>
+  <a href="ch09.html">09 · Parallelism</a>
+  <a href="ch10.html">10 · Optimizations</a>
+  <a href="ch11.html">11 · Benchmarks</a>
+</nav>
+
+<!-- ── HERO ── -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="series-badge">Chapter 01 of 11 · nano-vLLM Deep Dive</div>
+  <div class="chapter-num">01</div>
+  <h1>What Is LLM Inference?</h1>
+  <p class="hero-sub">Everything that happens between you typing a question and seeing the answer — explained from zero, one step at a time.</p>
+  <div class="hero-nav">
+    <a href="index.html" class="btn-ghost btn">← Series Index</a>
+    <a href="ch02.html" class="btn-primary btn">Next: Architecture →</a>
+  </div>
+</header>
+
+<!-- ── MAIN ── -->
+<main>
+
+<!-- ══════════════════════════════════════
+     SECTION 1 — OPENING ANALOGY
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 1 — The Big Picture</div>
+  <h2>What even is inference?</h2>
+  <p class="lead">Every time you send a message to an AI and it responds, that's inference. But what's happening inside? Let's build the mental model from scratch before touching any code.</p>
+
+  <div class="callout insight">
+    <strong>The Chef Analogy</strong>
+    Imagine a master chef who spent years reading every cookbook ever written. That long study period is <em>training</em> — it shaped who she is, it's done, the books are closed. Now when you hand her a half-written recipe and ask "what comes next?", she doesn't re-read all those books. She just <em>thinks</em> and writes the next ingredient. Then the next. One at a time. That's <strong>inference</strong>. The LLM is the chef. Your prompt is the half-written recipe. Each generated word is the next ingredient she writes down.
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Training vs Inference -->
+  <h3>Training vs Inference — not the same thing</h3>
+  <p class="lead">These describe two completely separate phases of an AI system's life. Most beginners conflate them. Here's the precise distinction:</p>
+
+  <div class="phase-compare">
+    <div class="phase-box" style="--phase-color:var(--accent);">
+      <span class="phase-tag">Training — happens once</span>
+      <h4>Learning from data</h4>
+      <ul>
+        <li>Runs once, before deployment, on thousands of GPUs for weeks</li>
+        <li>The model reads billions of text documents and finds patterns</li>
+        <li>Adjusts billions of internal numbers called <em>weights</em> or <em>parameters</em></li>
+        <li>Goal: get very good at predicting "what word comes next?"</li>
+        <li>When done, the weights are <strong>frozen</strong> — the model stops learning</li>
+        <li>Example: GPT-4 trained once, then deployed for millions of users</li>
+      </ul>
+    </div>
+    <div class="phase-box" style="--phase-color:var(--accent2);">
+      <span class="phase-tag">Inference — happens constantly</span>
+      <h4>Using the trained model</h4>
+      <ul>
+        <li>Happens every time you send a message — thousands per second at scale</li>
+        <li>The frozen model uses its learned weights to generate a response</li>
+        <li>No learning happens — weights don't change at all</li>
+        <li>Takes milliseconds to seconds per response</li>
+        <li>This is <strong>entirely</strong> what nano-vLLM is about</li>
+        <li>Example: every reply Claude gives you is one inference run</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 2 — TOKENS
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 2 — The Atomic Unit</div>
+  <h2>What is a "token"?</h2>
+  <p class="lead">LLMs don't read words — they read <strong style="color:var(--text)">tokens</strong>. A token is a chunk of text, roughly 3–4 characters on average. Common words are usually one token. Rare or long words split into multiple tokens. Punctuation is its own token.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Tokenization demo — hover to reveal ID</div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;">The sentence <em>"Hello, how are you?"</em> splits into 6 tokens. Hover each to see the integer ID the model actually processes:</p>
+    <div class="token-bar" id="tok-demo">
+      <div class="token prompt" data-word="Hello" data-id="9906">Hello</div>
+      <div class="token prompt" data-word="," data-id="11">,</div>
+      <div class="token prompt" data-word="how" data-id="1495">how</div>
+      <div class="token prompt" data-word="are" data-id="553">are</div>
+      <div class="token prompt" data-word="you" data-id="498">you</div>
+      <div class="token prompt" data-word="?" data-id="30">?</div>
+    </div>
+    <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem;">The model never sees the letters "H-e-l-l-o". It sees the integer <code>9906</code>. The mapping was fixed during training and never changes.</p>
+  </div>
+
+  <h3>Why tokens instead of whole words?</h3>
+  <div class="card-grid" style="grid-template-columns:repeat(3,1fr);">
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Fixed vocabulary</h4>
+      <p>~50,000 tokens can represent any human language. A word-based vocabulary would need millions of entries and still fail on new words.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Handles unknowns</h4>
+      <p>"nano-vLLM" splits into ["nano", "-", "v", "LLM"]. New technical terms, names, code — everything decomposes into known sub-pieces. Nothing is ever truly "unknown".</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>Math-friendly</h4>
+      <p>Neural networks work with numbers, not text. Tokens are the bridge: text → integers → math → integers → text.</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>Token count matters for cost and speed</strong>
+    When an API charges "per token" or says "128k context limit", they mean this. 1 page of text ≈ 500 tokens. A full novel ≈ 100,000 tokens. Every token requires a full forward pass during decode. More tokens = more computation = more time and money. nano-vLLM's entire job is to process as many tokens as possible, as fast as possible, on as little GPU memory as possible.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 3 — THE 6-STEP PIPELINE (interactive)
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 3 — The Pipeline</div>
+  <h2>The 6 steps of inference</h2>
+  <p class="lead">When you send a prompt, it passes through six distinct stages before you see any output. Click through each step to understand what's happening and why.</p>
+
+  <!-- dots -->
+  <div style="display:flex;gap:7px;align-items:center;margin-bottom:1rem;flex-wrap:wrap;" id="pipe-dots"></div>
+
+  <!-- card -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2rem;min-height:290px;" id="pipe-card"></div>
+
+  <!-- nav -->
+  <div style="display:flex;gap:0.75rem;margin-top:1rem;align-items:center;">
+    <button class="btn btn-outline" onclick="pipeNav(-1)" id="pipe-prev">← Prev</button>
+    <button class="btn btn-cyan" onclick="pipeNav(1)" id="pipe-next">Next →</button>
+    <span style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);margin-left:auto;" id="pipe-counter"></span>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 4 — Q K V
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 4 — Inside Attention</div>
+  <h2>Keys, Queries, and Values</h2>
+  <p class="lead">In the pipeline you saw that the Prefill step produces Q, K, and V vectors, and that K and V get saved to the "KV cache". This section explains what those actually are — because they appear in every chapter that follows.</p>
+
+  <div class="callout insight">
+    <strong>The Library Search Analogy</strong>
+    You're in a library looking for information about aerodynamics. You write your question on a slip of paper — that's your <strong>Query (Q)</strong>. Every book has a summary card on its spine describing what it covers — those are the <strong>Keys (K)</strong>. The actual text inside each book — the information you'd read once you find the right one — is the <strong>Value (V)</strong>. You compare your Query slip against every Key card to decide relevance, then read the Value content from the most relevant books in proportion to how relevant each was.
+  </div>
+
+  <!-- Q K V cards -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin:1.5rem 0;">
+    <div style="background:var(--surface);border:1px solid rgba(255,77,109,0.4);border-top:3px solid var(--accent2);border-radius:4px;padding:1.25rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent2);margin-bottom:0.6rem;">Q — QUERY VECTOR</div>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;"><strong style="color:var(--text)">What the current token is asking.</strong> When the model processes the word "fly", its Query says something like "I need context about motion and physics".</p>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;">Q is used immediately to compute attention scores against all past tokens' Keys. Once the scores are computed, Q is discarded.</p>
+      <div style="font-family:'Space Mono',monospace;font-size:0.68rem;background:var(--code-bg);border:1px solid var(--border);padding:0.6rem;border-radius:3px;color:var(--accent2);">Used now. Never saved.<br>Not in the KV cache.</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid rgba(0,229,255,0.4);border-top:3px solid var(--accent);border-radius:4px;padding:1.25rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent);margin-bottom:0.6rem;">K — KEY VECTOR</div>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;"><strong style="color:var(--text)">What a token advertises about itself.</strong> The token "airplane" has a Key that encodes something like "I am a flying machine, relevant to queries about flight or physics".</p>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;">Every future token will compute its Q against this K to decide how much attention to give "airplane". So K must be kept forever.</p>
+      <div style="font-family:'Space Mono',monospace;font-size:0.68rem;background:var(--code-bg);border:1px solid var(--border);padding:0.6rem;border-radius:3px;color:var(--accent);">Saved to KV cache.<br>Reused by every future token.</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid rgba(180,255,111,0.4);border-top:3px solid var(--accent3);border-radius:4px;padding:1.25rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent3);margin-bottom:0.6rem;">V — VALUE VECTOR</div>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;"><strong style="color:var(--text)">The actual content retrieved.</strong> Once a token's Key wins high relevance, its Value is what gets mixed into the output. K decides <em>if</em> you're selected; V is <em>what</em> you contribute.</p>
+      <p style="font-size:0.82rem;color:var(--muted);line-height:1.7;margin-bottom:0.75rem;">A high Q·K dot-product score means more of that token's V is weighted into the final attention output.</p>
+      <div style="font-family:'Space Mono',monospace;font-size:0.68rem;background:var(--code-bg);border:1px solid var(--border);padding:0.6rem;border-radius:3px;color:var(--accent3);">Saved to KV cache.<br>Retrieved weighted by Q·K scores.</div>
+    </div>
+  </div>
+
+  <!-- attention steps -->
+  <h3>How Q, K, V produce the attention output — 4 steps</h3>
+  <p class="lead">This runs in every transformer layer, for every token, on every forward pass.</p>
+
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(255,77,109,0.15);border:1px solid rgba(255,77,109,0.4);color:var(--accent2);">1</div>
+    <div>
+      <h4>Compute relevance scores — Q · K (dot product)</h4>
+      <p>The current token's Q vector is dot-producted with every past token's K vector. A high score means "this past token is very relevant to what I'm looking for right now". For a 1,000-token context, this produces 1,000 scores — one per past token.</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(0,229,255,0.15);border:1px solid rgba(0,229,255,0.4);color:var(--accent);">2</div>
+    <div>
+      <h4>Scale and normalise — softmax</h4>
+      <p>Scores are divided by √(head_dim) to keep them numerically stable, then passed through <em>softmax</em> to convert them into probabilities summing to 1.0. These are the <strong style="color:var(--text)">attention weights</strong>. Most are near zero; a handful spike high. This is literally "how much to attend to each past token".</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);color:var(--accent3);">3</div>
+    <div>
+      <h4>Retrieve content — weighted sum of V</h4>
+      <p>Each past token's V vector is multiplied by its attention weight, then all are summed. Tokens with high weight contribute more of their V to the output. The result is a rich, context-aware vector — the "answer" to the current token's Query.</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(255,179,71,0.15);border:1px solid rgba(255,179,71,0.4);color:var(--accent4);">4</div>
+    <div>
+      <h4>Pass through feed-forward layer</h4>
+      <p>The attention output feeds into a feed-forward network (two linear layers with a non-linearity) that further transforms it. Result: the token's updated representation — now enriched with context from the whole sequence. This flows into the next transformer layer and the process repeats.</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>Why only K and V are saved — not Q</strong>
+    The Query is ephemeral — token 50 asks its question and immediately gets its answer. But the Keys and Values of tokens 1–49 will be needed again when token 51 runs, then 52, then 53. Without caching, you'd recompute K and V for every previous token on every single decode step — O(n²) work as the sequence grows. By saving K and V once during prefill and reusing them, each decode step only computes Q for the new token. That's the entire reason the KV cache exists. <strong>Chapters 3 and 4</strong> are entirely about how to store and manage it efficiently.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 5 — AUTOREGRESSIVE DEMO
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 5 — Generation Loop</div>
+  <h2>Autoregressive generation</h2>
+  <p class="lead">The single most important thing to internalise: the model <strong style="color:var(--text)">cannot see the future</strong>. It generates one token, appends it to the context, then generates the next — based on everything including what it just wrote. This is called <em>autoregressive</em> generation.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Watch a sentence build — one token at a time</div>
+    <div style="margin-bottom:1.25rem;">
+      <div style="font-size:0.7rem;font-family:'Space Mono',monospace;color:var(--muted);margin-bottom:0.5rem;">PROMPT (given to the model):</div>
+      <div class="token-bar">
+        <div class="token prompt">The</div>
+        <div class="token prompt">cat</div>
+        <div class="token prompt">sat</div>
+        <div class="token prompt">on</div>
+        <div class="token prompt">the</div>
+      </div>
+    </div>
+    <div style="margin-bottom:1rem;">
+      <div style="font-size:0.7rem;font-family:'Space Mono',monospace;color:var(--muted);margin-bottom:0.5rem;">GENERATED (so far):</div>
+      <div class="token-bar" id="ar-tokens" style="min-height:32px;"></div>
+    </div>
+    <div style="background:var(--code-bg);border:1px solid var(--border);border-radius:3px;padding:0.85rem 1rem;margin-bottom:1rem;font-family:'Space Mono',monospace;font-size:0.72rem;line-height:1.9;min-height:48px;" id="ar-ctx"></div>
+    <div style="font-size:0.78rem;color:var(--muted);min-height:22px;margin-bottom:1rem;" id="ar-note"></div>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+      <button class="btn btn-cyan" onclick="arStep()" id="ar-btn">▶ Generate next token</button>
+      <button class="btn btn-outline" onclick="arReset()">↺ Reset</button>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Why this loop is expensive</strong>
+    Each token generation runs a full forward pass through the entire model — all transformer layers, all attention heads. For a 7B parameter model that's roughly 7 billion multiply-accumulate operations per token. A 200-word response is ~260 tokens = 260 full forward passes. At scale, with thousands of users, this is an enormous amount of compute — which is exactly why every optimisation in the chapters ahead matters.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 6 — GPU MEMORY (HBM)
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 6 — Hardware Context</div>
+  <h2>HBM and SRAM — the GPU's two memories</h2>
+  <p class="lead">When inference is described as "memory-bandwidth bound" or you see "80 GB HBM3e" in a GPU spec sheet, this is what it means. Understanding this one diagram explains why most kernel-level optimisations exist.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">GPU Memory Hierarchy</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;">
+      <div style="background:var(--surface2);border:1px solid rgba(0,229,255,0.3);border-radius:4px;padding:1.25rem;position:relative;">
+        <div style="position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);border-radius:4px 4px 0 0;"></div>
+        <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent);margin-bottom:0.75rem;margin-top:0.25rem;">HBM — HIGH BANDWIDTH MEMORY</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.85rem;">
+          <div style="text-align:center;background:var(--code-bg);border-radius:3px;padding:0.5rem;">
+            <div style="font-family:'Space Mono',monospace;font-size:1rem;font-weight:700;color:var(--accent);">80 GB</div>
+            <div style="font-size:0.62rem;color:var(--muted);">capacity (H100)</div>
+          </div>
+          <div style="text-align:center;background:var(--code-bg);border-radius:3px;padding:0.5rem;">
+            <div style="font-family:'Space Mono',monospace;font-size:1rem;font-weight:700;color:var(--accent);">3.35 TB/s</div>
+            <div style="font-size:0.62rem;color:var(--muted);">bandwidth</div>
+          </div>
+        </div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:0.4rem;">
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent);">→</span>Stacked memory chips physically on the GPU package, separate from the compute die</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent);">→</span>Stores <em>everything</em>: model weights, KV cache, activations, gradients</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent);">→</span>The "80 GB" in an "H100 80 GB" spec refers to this</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent);">→</span>Decode is bottlenecked here: every step reads 14 GB+ of weights from HBM</li>
+        </ul>
+      </div>
+      <div style="background:var(--surface2);border:1px solid rgba(180,255,111,0.3);border-radius:4px;padding:1.25rem;position:relative;">
+        <div style="position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent3);border-radius:4px 4px 0 0;"></div>
+        <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent3);margin-bottom:0.75rem;margin-top:0.25rem;">SRAM — ON-CHIP CACHE</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.85rem;">
+          <div style="text-align:center;background:var(--code-bg);border-radius:3px;padding:0.5rem;">
+            <div style="font-family:'Space Mono',monospace;font-size:1rem;font-weight:700;color:var(--accent3);">50 MB</div>
+            <div style="font-size:0.62rem;color:var(--muted);">capacity (H100)</div>
+          </div>
+          <div style="text-align:center;background:var(--code-bg);border-radius:3px;padding:0.5rem;">
+            <div style="font-family:'Space Mono',monospace;font-size:1rem;font-weight:700;color:var(--accent3);">~19 TB/s</div>
+            <div style="font-size:0.62rem;color:var(--muted);">bandwidth</div>
+          </div>
+        </div>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:0.4rem;">
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent3);">→</span>Built directly into the compute die — physically next to CUDA cores</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent3);">→</span>~6× faster than HBM, but tiny — only ~50 MB total</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent3);">→</span>Used as a high-speed scratchpad: data arrives from HBM, is processed here, result written back</li>
+          <li style="font-size:0.8rem;color:var(--muted);padding-left:1rem;position:relative;"><span style="position:absolute;left:0;color:var(--accent3);">→</span>FlashAttention <span class="xref">→ Ch.10</span> keeps attention tiles in SRAM to avoid HBM round-trips</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- bandwidth bars -->
+    <div style="font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:0.6rem;">Bandwidth comparison (H100)</div>
+    <div class="bw-row">
+      <div class="bw-header"><span>SRAM (on-chip)</span><span>~19 TB/s</span></div>
+      <div class="bw-track"><div class="bw-fill" style="width:100%;background:var(--accent3);">██████████ BLAZING FAST (right next to compute)</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-header"><span>HBM (GPU memory)</span><span>3.35 TB/s</span></div>
+      <div class="bw-track"><div class="bw-fill" style="width:17.6%;background:var(--accent);">███ FAST</div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-header"><span>PCIe 5.0 (CPU ↔ GPU)</span><span>0.064 TB/s</span></div>
+      <div class="bw-track" style="position:relative;">
+        <div class="bw-fill" style="width:0.34%;background:var(--accent2);min-width:5px;"></div>
+        <span style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--accent2);position:absolute;left:12px;top:50%;transform:translateY(-50%);">← 300× slower than SRAM</span>
+      </div>
+    </div>
+    <p style="font-size:0.75rem;color:var(--muted);margin-top:1rem;line-height:1.6;">The HBM → SRAM → compute → SRAM → HBM round-trip is the critical path for every GPU operation. Minimising unnecessary HBM reads is the goal of FlashAttention, CUDA Graphs, and Triton kernels — all covered in <span class="xref">Ch.10</span>.</p>
+  </div>
+
+  <!-- memory simulator -->
+  <h3>Interactive: how context length eats GPU memory</h3>
+  <p class="lead">Drag the sliders to see how KV cache memory grows. This is the problem that PagedAttention <span class="xref">→ Ch.04</span> is designed to solve.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">GPU Memory Estimator</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem;">
+      <div>
+        <label style="font-size:0.72rem;font-family:'Space Mono',monospace;color:var(--muted);display:block;margin-bottom:0.4rem;">CONTEXT LENGTH (tokens)</label>
+        <div style="display:flex;align-items:center;gap:0.75rem;">
+          <input type="range" id="ctx-sl" min="1024" max="131072" step="1024" value="8192" style="flex:1;accent-color:var(--accent);" oninput="updateMem()">
+          <span style="font-family:'Space Mono',monospace;font-size:0.8rem;color:var(--accent);min-width:68px;text-align:right;" id="ctx-val">8,192</span>
+        </div>
+      </div>
+      <div>
+        <label style="font-size:0.72rem;font-family:'Space Mono',monospace;color:var(--muted);display:block;margin-bottom:0.4rem;">MODEL SIZE</label>
+        <select id="model-sel" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:0.5rem;font-family:'Space Mono',monospace;font-size:0.72rem;border-radius:3px;cursor:pointer;" onchange="updateMem()">
+          <option value="0.6">Qwen3-0.6B (nano-vLLM default)</option>
+          <option value="1.7">Qwen3-1.7B</option>
+          <option value="7" selected>LLaMA-3 7B</option>
+          <option value="13">LLaMA-3 13B</option>
+          <option value="70">LLaMA-3 70B</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+        <div id="kv-gb" style="font-family:'Space Mono',monospace;font-size:1.4rem;font-weight:700;color:var(--accent);">–</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">KV Cache</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+        <div id="wt-gb" style="font-family:'Space Mono',monospace;font-size:1.4rem;font-weight:700;color:var(--accent4);">–</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">Model Weights</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+        <div id="tot-gb" style="font-family:'Space Mono',monospace;font-size:1.4rem;font-weight:700;">–</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">Total Required</div>
+      </div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-header"><span>KV Cache</span><span id="kv-pct">–</span></div>
+      <div class="bw-track"><div id="kv-bar" class="bw-fill" style="background:var(--accent);width:0%;"></div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-header"><span>Model Weights</span><span id="wt-pct">–</span></div>
+      <div class="bw-track"><div id="wt-bar" class="bw-fill" style="background:var(--accent4);width:0%;"></div></div>
+    </div>
+    <div class="bw-row">
+      <div class="bw-header"><span>Total vs 80 GB H100</span><span id="tot-pct">–</span></div>
+      <div class="bw-track"><div id="tot-bar" class="bw-fill" style="width:0%;"></div></div>
+    </div>
+    <p style="font-size:0.75rem;color:var(--muted);margin-top:0.85rem;line-height:1.6;" id="mem-note"></p>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 7 — NANO-VLLM CODE
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 7 — In nano-vLLM</div>
+  <h2>How inference looks in code</h2>
+  <p class="lead">Here's the complete public API for running inference with nano-vLLM. Every concept from this chapter — tokens, sampling, generate loop — is represented in just these few lines.</p>
+
+  <div class="code-label">example.py — the complete inference call</div>
+  <pre><span class="keyword">from</span> nanovllm <span class="keyword">import</span> LLM, SamplingParams
+
+<span class="comment"># Step 1 — Load the model (weights go into GPU HBM)</span>
+llm = <span class="cls">LLM</span>(
+    <span class="string">"./Qwen3-0.6B"</span>,          <span class="comment"># path to HuggingFace weights directory</span>
+    enforce_eager=<span class="keyword">True</span>,      <span class="comment"># disable CUDA graphs — simpler for learning</span>
+    tensor_parallel_size=<span class="num">1</span>   <span class="comment"># single GPU — see Ch.09 for multi-GPU</span>
+)
+
+<span class="comment"># Step 2 — Define sampling behaviour (how to pick each next token)</span>
+params = <span class="cls">SamplingParams</span>(
+    temperature=<span class="num">0.7</span>,          <span class="comment"># randomness: 0 = greedy, 1 = more creative</span>
+    top_k=<span class="num">50</span>,                 <span class="comment"># only consider the top 50 candidates</span>
+    max_tokens=<span class="num">256</span>            <span class="comment"># stop after 256 generated tokens</span>
+)
+
+<span class="comment"># Step 3 — Run inference (tokenise → prefill → decode loop → detokenise)</span>
+outputs = llm.<span class="fn">generate</span>(
+    [<span class="string">"Explain how airplanes fly."</span>],  <span class="comment"># list of prompt strings</span>
+    params
+)
+
+<span class="comment"># Step 4 — outputs[0]['text'] is the detokenised string response</span>
+<span class="fn">print</span>(outputs[<span class="num">0</span>][<span class="string">'text'</span>])</pre>
+
+  <div class="callout info">
+    <strong>What happens inside llm.generate()</strong>
+    The call to <code>generate()</code> runs the entire 6-step pipeline you walked through in Section 3: (1) tokenise the prompt strings, (2) schedule them via the Scheduler <span class="xref">→ Ch.05</span>, (3) prefill — process all input tokens and build the KV cache <span class="xref">→ Ch.03</span>, (4) decode loop — generate one token per step until done, (5) sample each token via SamplingParams <span class="xref">→ Ch.08</span>, (6) detokenise the output token IDs back into text. All of that is abstracted behind one method call.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 8 — BOTTLENECKS
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 8 — Why It Matters</div>
+  <h2>The three core bottlenecks</h2>
+  <p class="lead">Running inference for one user is manageable. Running it for thousands of concurrent users with long prompts and strict latency requirements introduces three fundamental constraints. Every remaining chapter addresses one of these.</p>
+
+  <div class="card-grid">
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>① Memory Bandwidth</h4>
+      <p>During decode, the GPU reads the entire model's weights from HBM once per generated token. For a 7B model at fp16, that's 14 GB transferred every single step. The compute cores sit idle waiting for data. This is why decode is said to be "memory-bandwidth bound" rather than "compute bound".</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>② Compute Throughput</h4>
+      <p>Prefill — processing the full input prompt — requires massive parallel matrix multiplications across all tokens simultaneously. A 10,000-token prompt can take seconds even on powerful hardware. This phase is "compute bound": the floating-point units, not the memory bus, are the bottleneck.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>③ GPU Memory Capacity</h4>
+      <p>Every processed token writes K and V vectors to the KV cache — which must stay in HBM for the duration of the request. A 70B model with 128k context needs 100+ GB just for the cache — exceeding a single GPU. Managing this memory is what most of nano-vLLM's ~1,200 lines of code handle.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>④ GPU Utilisation</h4>
+      <p>GPUs are efficient when processing large batches. But requests arrive at random times with different lengths. Without careful scheduling, the GPU idles between requests or wastes cycles waiting for a slow request to finish. Continuous batching <span class="xref">→ Ch.05</span> solves this.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 9 — MISCONCEPTIONS
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 9 — Common Mistakes</div>
+  <h2>Things beginners get wrong</h2>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 1 — "The model learns from my messages"</div>
+    <div class="reality"><strong>Reality:</strong> During inference, the model's weights are completely frozen. Your conversation doesn't update them. The model isn't "learning" anything. It's applying patterns baked in during training to generate a contextually appropriate response — it's sophisticated pattern completion, not real-time learning.</div>
+  </div>
+  <div class="misconception">
+    <div class="myth">✗ Myth 2 — "The model generates the full response at once"</div>
+    <div class="reality"><strong>Reality:</strong> Generation is strictly sequential — one token at a time. Token N+1 cannot be predicted before token N exists. This is why you see streaming responses appear word by word, not all at once. There's no shortcut: each token requires a full forward pass through the model.</div>
+  </div>
+  <div class="misconception">
+    <div class="myth">✗ Myth 3 — "More GPU memory = faster generation"</div>
+    <div class="reality"><strong>Reality:</strong> More GPU memory increases the <em>number of requests you can serve simultaneously</em> (bigger KV cache, more requests fit), but doesn't directly speed up individual token generation. Speed is limited by memory bandwidth (GB/s), not memory capacity (GB). A 40 GB A100 and an 80 GB A100 generate tokens at the same speed — the 80 GB just fits more concurrent requests.</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 10 — QUIZ
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 10 — Check Your Understanding</div>
+  <h2>Quiz</h2>
+  <p class="lead">Three questions to cement the key ideas. Wrong answers explain why they're wrong, not just mark you incorrect.</p>
+
+  <div class="quiz-block">
+    <p class="q">1. When does an LLM update its weights — during training, or during inference?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(1,'a',false,'During inference the model\'s weights are completely frozen — no learning happens. All weight updates occurred during training, which ran once before deployment.')">During inference — it learns from each conversation</button>
+      <button onclick="quiz(1,'b',true,'Correct. Training adjusts weights. Inference uses frozen weights to generate responses. The model is not learning from your messages.')">During training only — weights are frozen at inference time</button>
+      <button onclick="quiz(1,'c',false,'The split is not equal. Training is the dedicated learning phase; inference is pure generation with no weight updates.')">Both — training adjusts weights, inference fine-tunes them</button>
+    </div>
+    <div class="quiz-fb" id="fb1"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">2. Why are K and V vectors cached, but Q vectors are not?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(2,'a',false,'It\'s not about size — Q, K, and V are actually the same shape. The difference is about <em>reuse</em>: K and V of past tokens are needed repeatedly by future tokens; Q is only used once.')">Q vectors are larger and wouldn\'t fit in memory</button>
+      <button onclick="quiz(2,'b',false,'All three are computed per token. The difference is that K and V need to be available to future tokens for attention lookups, while Q is only used in the current step.')">Q vectors aren\'t computed for every token</button>
+      <button onclick="quiz(2,'c',true,'Correct. Q is used immediately to query past tokens\' Keys, then discarded. K and V of every past token must remain available because every future token will query against them. Caching K and V avoids recomputing them on every decode step.')">K and V of past tokens are needed by every future token; Q is only used once and immediately discarded</button>
+    </div>
+    <div class="quiz-fb" id="fb2"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">3. What does "HBM" refer to in GPU specs?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(3,'a',false,'CUDA cores are the compute units — the actual math processors on the GPU die. HBM is the memory system, not the compute system.')">The GPU\'s compute cores (CUDA cores)</button>
+      <button onclick="quiz(3,'b',true,'Correct. HBM (High Bandwidth Memory) is the large, stacked memory on the GPU package — the "80 GB" in an H100 80 GB. It stores weights, KV cache, and activations. It\'s fast, but physically separate from compute cores, which is why reading from it creates the memory-bandwidth bottleneck during decode.')">The large memory on the GPU package — the "80 GB" in an H100 80 GB</button>
+      <button onclick="quiz(3,'c',false,'PCIe is the bus connecting the CPU to the GPU — it\'s orders of magnitude slower than HBM. Transferring data across PCIe is something to be avoided, not relied upon.')">The connection between the CPU and GPU (PCIe bus)</button>
+    </div>
+    <div class="quiz-fb" id="fb3"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════════════
+     SECTION 11 — TAKEAWAYS
+══════════════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 11 — Key Takeaways</div>
+  <h2>What you now know</h2>
+
+  <div class="takeaways">
+    <div class="takeaways-label">Chapter 01 — Summary</div>
+    <div class="takeaway-grid">
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Training ≠ Inference.</strong> Training shapes weights once, on huge compute. Inference uses those frozen weights to generate text — no learning during inference.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Tokens are the atomic unit.</strong> Text → integers via tokenizer → model math → integers → text. The model only ever sees numbers, never characters.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Q asks, K advertises, V delivers.</strong> Query is used once and discarded. Key and Value are saved to the KV cache and reused by every future token — that's why caching them saves enormous compute.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Autoregressive = one token at a time, always.</strong> Each new token requires a full forward pass. The model cannot predict token N+1 without first generating token N.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>HBM is the GPU's large memory.</strong> The "80 GB" on an H100. Decode is slow because reading 14+ GB from HBM per step is the bottleneck — compute cores sit idle waiting for data.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Three bottlenecks drive everything ahead:</strong> memory bandwidth (decode), compute throughput (prefill), and GPU memory capacity (KV cache size). Every chapter solves one of these.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ── FOOTER ── -->
+<footer class="chapter-footer">
+  <div class="footer-nav">
+    <a href="index.html" class="btn btn-outline">← Series Index</a>
+    <a href="ch02.html" class="btn btn-primary">Next: Ch02 — Architecture →</a>
+  </div>
+  <div class="footer-credit">
+    nano-vLLM by <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">GeeeekExplorer</a> · Study material · MIT License
+  </div>
+</footer>
+
+<!-- ── SCRIPTS ── -->
+<script>
+(function(){
+
+/* ── mark visited ── */
+localStorage.setItem('ch01','1');
+
+/* ── token hover IDs ── */
+document.querySelectorAll('#tok-demo .token').forEach(t=>{
+  t.addEventListener('mouseenter',function(){
+    this.dataset.orig=this.textContent;
+    this.textContent=this.dataset.id;
+    this.style.background='rgba(0,229,255,0.18)';
+  });
+  t.addEventListener('mouseleave',function(){
+    this.textContent=this.dataset.orig||this.dataset.word;
+    this.style.background='';
+  });
+});
+
+/* ── 6-step pipeline ── */
+const STEPS=[
+  {n:'01',name:'Prompt arrives',tag:'INPUT',tagC:'var(--accent)',
+   body:`You type <em>"Explain how airplanes fly."</em> At this point it's just a string of characters. The model cannot process raw text — it only understands integers. So the very first thing that must happen is conversion.`,
+   vis:`<div style="font-family:'Space Mono',monospace;color:var(--accent);font-size:0.85rem;margin-bottom:0.4rem;">"Explain how airplanes fly."</div><div style="font-size:0.72rem;color:var(--muted);">↳ 27 UTF-8 characters — not yet usable by the model</div>`},
+  {n:'02',name:'Tokenisation',tag:'CPU',tagC:'var(--accent3)',
+   body:`A <strong style="color:var(--text)">tokenizer</strong> splits the text into tokens and maps each to an integer ID. "Explain" → 849. "how" → 1495. "airplanes" splits into two tokens. This mapping is fixed from training — it never changes. The result is a list of integers: the only thing the GPU processes.`,
+   vis:`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:0.5rem;"><div class="token prompt">Explain</div><div class="token prompt">how</div><div class="token prompt">air</div><div class="token prompt">planes</div><div class="token prompt">fly</div><div class="token prompt">.</div></div><div style="font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);">→ [ 849, 1495, 3283, 22069, 11722, 13 ]</div>`},
+  {n:'03',name:'Prefill phase',tag:'GPU — COMPUTE BOUND',tagC:'var(--accent2)',
+   body:`All input tokens are processed <strong style="color:var(--text)">simultaneously</strong> in one parallel forward pass. Each token produces Q, K, and V vectors. K and V are written to the <strong style="color:var(--text)">KV cache</strong> in HBM. Q is used immediately to compute attention scores and then discarded. The output: logit scores for the next token. This is compute-bound — the GPU's matrix multiply units are saturated.`,
+   vis:`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-family:'Space Mono',monospace;font-size:0.68rem;"><div style="padding:0.5rem;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.2);border-radius:3px;"><div style="color:var(--accent2);margin-bottom:3px;">Q — used now</div><div style="color:var(--muted);">Computes attention scores. Discarded after.</div></div><div style="padding:0.5rem;background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);border-radius:3px;"><div style="color:var(--accent);margin-bottom:3px;">K → KV Cache</div><div style="color:var(--muted);">Saved to HBM. Future tokens query it.</div></div><div style="padding:0.5rem;background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.2);border-radius:3px;"><div style="color:var(--accent3);margin-bottom:3px;">V → KV Cache</div><div style="color:var(--muted);">Saved to HBM. Retrieved by attention.</div></div></div>`},
+  {n:'04',name:'Sampling',tag:'GPU',tagC:'var(--accent4)',
+   body:`The model outputs 50,000 numbers — one score (logit) per vocabulary token. The <strong style="color:var(--text)">sampler</strong> converts these into probabilities via softmax, then picks the next token. With temperature=0 it always picks the highest score (greedy/deterministic). With temperature>0 it samples proportionally to probability — introducing controlled randomness and creativity.`,
+   vis:`<div style="font-family:'Space Mono',monospace;font-size:0.72rem;"><div style="color:var(--muted);margin-bottom:0.5rem;">Top candidates (after softmax):</div><div style="display:flex;flex-direction:column;gap:3px;"><div style="display:flex;gap:0.5rem;align-items:center;"><span style="width:90px;font-size:0.7rem;color:var(--text);">"Airplanes"</span><div style="flex:1;background:var(--surface2);border-radius:2px;height:12px;overflow:hidden;"><div style="width:78%;height:100%;background:var(--accent4);border-radius:2px;"></div></div><span style="color:var(--accent4);font-size:0.68rem;">78%</span></div><div style="display:flex;gap:0.5rem;align-items:center;"><span style="width:90px;font-size:0.7rem;color:var(--muted);">"Aircraft"</span><div style="flex:1;background:var(--surface2);border-radius:2px;height:12px;overflow:hidden;"><div style="width:14%;height:100%;background:var(--muted);border-radius:2px;"></div></div><span style="color:var(--muted);font-size:0.68rem;">14%</span></div><div style="display:flex;gap:0.5rem;align-items:center;"><span style="width:90px;font-size:0.7rem;color:var(--muted);">"Planes"</span><div style="flex:1;background:var(--surface2);border-radius:2px;height:12px;overflow:hidden;"><div style="width:5%;height:100%;background:var(--muted);border-radius:2px;"></div></div><span style="color:var(--muted);font-size:0.68rem;">5%</span></div></div><div style="color:var(--accent4);margin-top:0.5rem;">→ "Airplanes" selected — first generated token</div></div>`},
+  {n:'05',name:'Decode loop',tag:'GPU — MEMORY BOUND',tagC:'var(--accent)',
+   body:`The new token is appended to the context. The model runs again — but processes only this one new token. It reads K and V from the cache for all previous tokens (no recompute). This is the loop: generate → append → generate. Each step reads all model weights from HBM — a large data transfer for just one token of compute. This makes decode <strong style="color:var(--text)">memory-bandwidth bound</strong>: the HBM → compute data pipe is the bottleneck, not the math units themselves.`,
+   vis:`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-family:'Space Mono',monospace;font-size:0.68rem;"><div style="padding:0.6rem;background:rgba(0,229,255,0.06);border:1px solid rgba(0,229,255,0.2);border-radius:3px;"><div style="color:var(--accent);margin-bottom:3px;">HBM read per step</div><div style="color:var(--muted);">~14 GB of model weights (7B fp16). Transferred from HBM to SRAM every single decode step.</div></div><div style="padding:0.6rem;background:rgba(255,179,71,0.06);border:1px solid rgba(255,179,71,0.2);border-radius:3px;"><div style="color:var(--accent4);margin-bottom:3px;">Compute per step</div><div style="color:var(--muted);">Very small — just one token's worth of matrix math. Cores idle most of the time waiting for data.</div></div></div><div style="color:var(--accent);font-size:0.7rem;margin-top:0.6rem;">↻ Repeats until EOS token or max_tokens reached</div>`},
+  {n:'06',name:'Detokenisation',tag:'CPU — OUTPUT',tagC:'var(--accent3)',
+   body:`Once all tokens are generated, the integer list is converted back into text by reversing the tokenizer mapping. Token 849 → "Airplanes". Token 13 → ".". The output strings are concatenated and returned. What looks like a fluent paragraph was assembled one integer at a time across hundreds of forward passes.`,
+   vis:`<div style="font-family:'Space Mono',monospace;font-size:0.72rem;"><div style="color:var(--muted);margin-bottom:0.5rem;">[ 849, 11722, 1060, 9839, 1364, ... ]</div><div style="color:var(--accent3);line-height:1.9;">→ "Airplanes fly using a principle called<br>&nbsp;&nbsp;&nbsp;Bernoulli's theorem..."</div></div>`}
+];
+
+let pStep=0;
+
+function renderDots(){
+  const c=document.getElementById('pipe-dots');
+  c.innerHTML='';
+  STEPS.forEach((_,i)=>{
+    const d=document.createElement('div');
+    d.style.cssText=`width:${i===pStep?'22px':'8px'};height:8px;border-radius:4px;cursor:pointer;transition:all 0.3s;background:${i<pStep?'var(--accent3)':i===pStep?'var(--accent)':'var(--border)'}`;
+    d.onclick=()=>{pStep=i;renderPipe();};
+    c.appendChild(d);
+  });
+}
+
+function renderPipe(){
+  const s=STEPS[pStep];
+  document.getElementById('pipe-card').innerHTML=`
+    <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:1rem;">
+      <div style="width:34px;height:34px;border-radius:50%;background:rgba(0,229,255,0.08);border:1px solid ${s.tagC};display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.68rem;font-weight:700;color:${s.tagC};flex-shrink:0;">${s.n}</div>
+      <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.15rem;">${s.name}</div>
+      <div style="margin-left:auto;font-family:'Space Mono',monospace;font-size:0.58rem;letter-spacing:0.08em;padding:0.2rem 0.6rem;background:${s.tagC}18;color:${s.tagC};border-radius:2px;border:1px solid ${s.tagC}44;white-space:nowrap;">${s.tag}</div>
+    </div>
+    <p style="font-size:0.87rem;color:var(--muted);line-height:1.8;margin-bottom:1.25rem;">${s.body}</p>
+    <div style="background:var(--code-bg);border:1px solid var(--border);border-left:3px solid ${s.tagC};border-radius:3px;padding:1rem 1.25rem;font-size:0.82rem;">${s.vis}</div>
+  `;
+  document.getElementById('pipe-counter').textContent=`STEP ${pStep+1} / ${STEPS.length}`;
+  document.getElementById('pipe-prev').style.opacity=pStep===0?'0.35':'1';
+  document.getElementById('pipe-next').textContent=pStep===STEPS.length-1?'↺ Start over':'Next →';
+  renderDots();
+}
+
+window.pipeNav=function(d){pStep=(pStep+d+STEPS.length)%STEPS.length;renderPipe();};
+renderPipe();
+
+/* ── autoregressive demo ── */
+const AR_TOKENS=[
+  {w:'mat',    note:'Step 1 of 6 — model sees "The cat sat on the" → predicts "mat" as the most likely continuation'},
+  {w:'.',      note:'Step 2 of 6 — context now includes "mat" → "." ends the sentence naturally'},
+  {w:'It',     note:'Step 3 of 6 — model begins a new sentence following the period'},
+  {w:'pur',    note:'Step 4 of 6 — sub-word tokenisation: "purred" splits into "pur" + "red"'},
+  {w:'red',    note:'Step 5 of 6 — "purred" completes — this is sub-word tokenisation in action'},
+  {w:'[EOS]',  note:'Step 6 of 6 — End-of-Sequence token emitted. The decode loop stops here.'},
+];
+let arIdx=0, arGenerated=[];
+
+function arRenderCtx(){
+  const base=['The','cat','sat','on','the'];
+  const ctx=base.concat(arGenerated);
+  document.getElementById('ar-ctx').innerHTML=ctx.map((w,i)=>
+    `<span style="color:${i<base.length?'var(--accent)':i===ctx.length-1?'var(--accent2)':'var(--muted)'};">[${w}]</span> `
+  ).join('');
+}
+
+window.arStep=function(){
+  if(arIdx>=AR_TOKENS.length)return;
+  const t=AR_TOKENS[arIdx];
+  arGenerated.push(t.w);
+  const bar=document.getElementById('ar-tokens');
+  const el=document.createElement('div');
+  el.className='token '+(t.w==='[EOS]'?'cached':'gen');
+  el.textContent=t.w;
+  bar.appendChild(el);
+  document.getElementById('ar-note').textContent=t.note;
+  arRenderCtx();
+  arIdx++;
+  if(arIdx>=AR_TOKENS.length){
+    const btn=document.getElementById('ar-btn');
+    btn.textContent='✓ Generation complete';
+    btn.style.borderColor='var(--accent3)';
+    btn.style.color='var(--accent3)';
+    btn.disabled=true;
+  }
+};
+
+window.arReset=function(){
+  arIdx=0;arGenerated=[];
+  document.getElementById('ar-tokens').innerHTML='';
+  document.getElementById('ar-note').textContent='';
+  const btn=document.getElementById('ar-btn');
+  btn.textContent='▶ Generate next token';
+  btn.style.borderColor='var(--accent)';
+  btn.style.color='var(--accent)';
+  btn.disabled=false;
+  arRenderCtx();
+};
+arRenderCtx();
+
+/* ── memory simulator ── */
+function updateMem(){
+  const ctx=parseInt(document.getElementById('ctx-sl').value);
+  const modelB=parseFloat(document.getElementById('model-sel').value);
+  document.getElementById('ctx-val').textContent=ctx.toLocaleString();
+  const layers=Math.round(modelB*4);
+  const kvPerTok=2*layers*8*128*2; // bytes: 2(k+v)*layers*heads*head_dim*fp16
+  const kvGB=kvPerTok*ctx/1e9;
+  const wtGB=modelB*2; // fp16
+  const totGB=kvGB+wtGB;
+  const gpuGB=80;
+  document.getElementById('kv-gb').textContent=kvGB.toFixed(1)+' GB';
+  document.getElementById('wt-gb').textContent=wtGB.toFixed(1)+' GB';
+  document.getElementById('tot-gb').textContent=totGB.toFixed(1)+' GB';
+  document.getElementById('tot-gb').style.color=totGB>gpuGB?'var(--accent2)':totGB>gpuGB*0.7?'var(--accent4)':'var(--accent3)';
+  const kvP=Math.min(kvGB/gpuGB*100,100);
+  const wtP=Math.min(wtGB/gpuGB*100,100);
+  const toP=Math.min(totGB/gpuGB*100,100);
+  const setBar=(id,pct,label,txt)=>{
+    const b=document.getElementById(id);
+    b.style.width=Math.max(pct,0.3)+'%';
+    b.textContent=pct>8?txt:'';
+    document.getElementById(label).textContent=pct.toFixed(1)+'% of GPU';
+  };
+  setBar('kv-bar',kvP,'kv-pct',kvGB.toFixed(1)+' GB');
+  setBar('wt-bar',wtP,'wt-pct',wtGB.toFixed(1)+' GB');
+  const tb=document.getElementById('tot-bar');
+  tb.style.width=Math.max(toP,0.3)+'%';
+  tb.style.background=toP>100?'var(--accent2)':toP>70?'var(--accent4)':'var(--accent3)';
+  tb.style.color='#000';
+  tb.textContent=toP>8?totGB.toFixed(1)+' GB':'';
+  document.getElementById('tot-pct').textContent=toP.toFixed(1)+'% of 80 GB H100';
+  const note=totGB>gpuGB
+    ?`⚠ Doesn't fit on a single H100. You'd need ${Math.ceil(totGB/gpuGB)} GPUs or a shorter context. This is exactly the problem PagedAttention (Ch.04) and tensor parallelism (Ch.09) address.`
+    :totGB>gpuGB*0.7
+    ?`⚡ Tight fit — ${(gpuGB-totGB).toFixed(1)} GB remaining. Little room for batching multiple requests.`
+    :`✓ Fits with ${(gpuGB-totGB).toFixed(1)} GB to spare — room for batching. Try increasing context or model size to see where it breaks.`;
+  document.getElementById('mem-note').textContent=note;
+}
+window.updateMem=updateMem;
+updateMem();
+
+/* ── quiz ── */
+const CORRECT={1:'b',2:'c',3:'b'};
+window.quiz=function(n,opt,isCorrect,msg){
+  const fb=document.getElementById('fb'+n);
+  fb.textContent=msg;
+  fb.className='quiz-fb show '+(isCorrect?'ok':'no');
+  document.querySelectorAll(`#fb${n}`).forEach(()=>{});
+  // highlight buttons
+  const opts=fb.previousElementSibling.querySelectorAll('button');
+  opts.forEach(b=>b.disabled=true);
+  // mark this one
+  const allBtns=document.querySelectorAll('.quiz-block:nth-child('+n+') button');
+  // simpler: find by parent
+  fb.closest('.quiz-block').querySelectorAll('button').forEach((b,i)=>{
+    const letters=['a','b','c'];
+    if(letters[i]===opt&&!isCorrect)b.classList.add('wrong');
+    if(letters[i]===CORRECT[n])b.classList.add('correct');
+    b.disabled=true;
+  });
+};
+
+})();
+</script>
+</body>
+</html>

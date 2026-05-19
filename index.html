@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nano-vLLM · LLM Inference Deep Dive</title>
+<meta name="description" content="An 11-chapter beginner-friendly series on LLM inference engineering — from tokens to PagedAttention, built around the nano-vLLM codebase.">
+<meta property="og:title" content="nano-vLLM · LLM Inference Deep Dive">
+<meta property="og:description" content="11 chapters. Every core concept explained from scratch — tokens, KV cache, PagedAttention, continuous batching, tensor parallelism and more.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ── */
+:root {
+  --bg:      #08090d;
+  --surface: #0f1117;
+  --surface2:#161a24;
+  --border:  #1e2535;
+  --accent:  #00e5ff;
+  --accent2: #ff4d6d;
+  --accent3: #b4ff6f;
+  --accent4: #ffb347;
+  --text:    #e2e8f4;
+  --muted:   #6b7a99;
+  --code-bg: #0a0e1a;
+}
+
+/* ── RESET ── */
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden;}
+
+/* ── SCAN LINES ── */
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9999;}
+
+/* ── HERO ── */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:5rem 2rem 4rem;position:relative;overflow:hidden;}
+
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(0,229,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.04) 1px,transparent 1px);background-size:60px 60px;animation:gridDrift 20s linear infinite;}
+@keyframes gridDrift{from{transform:translate(0,0);}to{transform:translate(60px,60px);}}
+
+.hero-glow{position:absolute;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(0,229,255,0.08) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 7s ease-in-out infinite;}
+@keyframes glowPulse{0%,100%{opacity:0.5;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.1);}}
+
+/* animated corner brackets */
+.hero-bracket{position:absolute;width:80px;height:80px;opacity:0.25;animation:bracketFade 3s ease-in-out infinite;}
+.hero-bracket.tl{top:2rem;left:2rem;border-top:1px solid var(--accent);border-left:1px solid var(--accent);animation-delay:0s;}
+.hero-bracket.tr{top:2rem;right:2rem;border-top:1px solid var(--accent);border-right:1px solid var(--accent);animation-delay:0.75s;}
+.hero-bracket.bl{bottom:2rem;left:2rem;border-bottom:1px solid var(--accent);border-left:1px solid var(--accent);animation-delay:1.5s;}
+.hero-bracket.br{bottom:2rem;right:2rem;border-bottom:1px solid var(--accent);border-right:1px solid var(--accent);animation-delay:2.25s;}
+@keyframes bracketFade{0%,100%{opacity:0.15;}50%{opacity:0.4;}}
+
+.series-eyebrow{font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.2em;color:var(--accent);border:1px solid rgba(0,229,255,0.25);padding:0.3rem 1rem;border-radius:2px;background:rgba(0,229,255,0.04);text-transform:uppercase;position:relative;z-index:1;animation:fadeUp 0.7s ease both;}
+
+.hero-title{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(2.8rem,7vw,5.5rem);line-height:1.0;letter-spacing:-0.03em;margin:1.25rem 0 0.5rem;position:relative;z-index:1;animation:fadeUp 0.7s ease 0.08s both;}
+.hero-title .dim{color:rgba(226,232,244,0.25);}
+.hero-title .hi{color:var(--accent);}
+
+.hero-sub{font-size:1rem;font-weight:300;color:var(--muted);max-width:580px;margin:0.75rem auto 0;position:relative;z-index:1;animation:fadeUp 0.7s ease 0.16s both;line-height:1.8;}
+
+.hero-meta{display:flex;gap:2.5rem;margin-top:2.5rem;position:relative;z-index:1;animation:fadeUp 0.7s ease 0.22s both;flex-wrap:wrap;justify-content:center;}
+.meta-item{text-align:center;}
+.meta-num{font-family:'Space Mono',monospace;font-size:1.6rem;font-weight:700;color:var(--accent);display:block;line-height:1;}
+.meta-label{font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-top:0.2rem;}
+
+.hero-cta{margin-top:2.5rem;position:relative;z-index:1;animation:fadeUp 0.7s ease 0.28s both;}
+.hero-cta a{display:inline-block;font-family:'Space Mono',monospace;font-size:0.72rem;letter-spacing:0.1em;text-transform:uppercase;text-decoration:none;padding:0.7rem 1.75rem;border-radius:3px;transition:all 0.2s;}
+.btn-start{background:var(--accent);color:#000;font-weight:700;margin-right:0.75rem;}
+.btn-start:hover{background:#00c8e0;transform:translateY(-1px);}
+.btn-repo{border:1px solid var(--border);color:var(--muted);}
+.btn-repo:hover{border-color:var(--accent);color:var(--accent);}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── PROGRESS BAR ── */
+.progress-bar{width:100%;max-width:900px;margin:0 auto;padding:0 2rem;}
+.pb-track{height:3px;background:var(--border);border-radius:2px;overflow:hidden;position:relative;}
+.pb-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent3));border-radius:2px;transition:width 0.6s ease;}
+.pb-label{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:0.4rem;letter-spacing:0.08em;text-transform:uppercase;}
+
+/* ── SECTION ── */
+.section-wrap{max-width:900px;margin:0 auto;padding:5rem 2rem;}
+.section-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--accent);text-transform:uppercase;margin-bottom:0.6rem;}
+.section-title{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(1.5rem,3vw,2.2rem);line-height:1.15;margin-bottom:0.85rem;letter-spacing:-0.02em;}
+.section-sub{font-size:0.9rem;color:var(--muted);max-width:640px;line-height:1.8;margin-bottom:2.5rem;}
+
+/* ── DIVIDER ── */
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:0 2rem;}
+
+/* ── CHAPTER GRID ── */
+.chapter-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1.25rem;}
+
+.ch-card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;text-decoration:none;color:inherit;display:block;transition:transform 0.25s,border-color 0.25s;cursor:pointer;}
+.ch-card:hover{transform:translateY(-3px);border-color:var(--card-accent);}
+.ch-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--card-accent);}
+
+/* visited overlay */
+.ch-card.visited::after{content:'✓';position:absolute;top:1rem;right:1rem;width:20px;height:20px;border-radius:50%;background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:var(--accent3);font-weight:700;display:grid;place-items:center;}
+
+.ch-num{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.1em;color:var(--card-accent);margin-bottom:0.6rem;text-transform:uppercase;}
+.ch-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;margin-bottom:0.5rem;color:var(--text);}
+.ch-desc{font-size:0.78rem;color:var(--muted);line-height:1.65;margin-bottom:1rem;}
+.ch-footer{display:flex;align-items:center;justify-content:space-between;}
+.ch-time{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);}
+.ch-arrow{font-size:0.8rem;color:var(--card-accent);opacity:0.6;transition:opacity 0.2s,transform 0.2s;}
+.ch-card:hover .ch-arrow{opacity:1;transform:translateX(3px);}
+
+/* locked card style */
+.ch-card.locked{opacity:0.45;cursor:default;pointer-events:none;}
+.ch-card.locked:hover{transform:none;}
+
+/* ── ABOUT SECTION ── */
+.about-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:1rem;}
+.about-card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;}
+.about-card h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.6rem;}
+.about-card p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── STACK VISUAL ── */
+.stack{display:flex;flex-direction:column;gap:3px;margin:1.5rem 0;}
+.stack-layer{display:flex;align-items:center;gap:1rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:0.65rem 1rem;position:relative;overflow:hidden;transition:border-color 0.2s;}
+.stack-layer:hover{border-color:var(--layer-c);}
+.stack-layer::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--layer-c);}
+.stack-num{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--layer-c);min-width:24px;}
+.stack-name{font-family:'Syne',sans-serif;font-weight:700;font-size:0.88rem;min-width:160px;}
+.stack-detail{font-size:0.78rem;color:var(--muted);}
+.stack-link{margin-left:auto;font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--layer-c);text-decoration:none;opacity:0;transition:opacity 0.2s;white-space:nowrap;}
+.stack-layer:hover .stack-link{opacity:1;}
+
+/* ── PREREQ / TOOLS ── */
+.pill-row{display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.75rem;}
+.pill{font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.25rem 0.7rem;border-radius:2px;border:1px solid;letter-spacing:0.05em;}
+.pill-cyan{border-color:rgba(0,229,255,0.3);color:var(--accent);background:rgba(0,229,255,0.06);}
+.pill-lime{border-color:rgba(180,255,111,0.3);color:var(--accent3);background:rgba(180,255,111,0.06);}
+.pill-amber{border-color:rgba(255,179,71,0.3);color:var(--accent4);background:rgba(255,179,71,0.06);}
+.pill-red{border-color:rgba(255,77,109,0.3);color:var(--accent2);background:rgba(255,77,109,0.06);}
+
+/* ── CALLOUT ── */
+.callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.87rem;line-height:1.8;}
+.callout strong{font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+.callout.info{border-color:var(--accent);background:rgba(0,229,255,0.04);}
+.callout.info strong{color:var(--accent);}
+.callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.04);}
+.callout.insight strong{color:var(--accent3);}
+
+/* ── FOOTER ── */
+footer{border-top:1px solid var(--border);padding:2.5rem 2rem;text-align:center;}
+.footer-inner{max-width:900px;margin:0 auto;}
+.footer-links{display:flex;gap:1.5rem;justify-content:center;flex-wrap:wrap;margin-bottom:1rem;}
+.footer-links a{font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--muted);text-decoration:none;letter-spacing:0.08em;text-transform:uppercase;transition:color 0.2s;}
+.footer-links a:hover{color:var(--accent);}
+.footer-credit{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);}
+.footer-credit a{color:var(--accent);text-decoration:none;}
+
+@media(max-width:640px){
+  .about-grid{grid-template-columns:1fr;}
+  .hero-meta{gap:1.5rem;}
+  .stack-detail{display:none;}
+}
+</style>
+</head>
+<body>
+
+<!-- ── HERO ── -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="hero-bracket tl"></div>
+  <div class="hero-bracket tr"></div>
+  <div class="hero-bracket bl"></div>
+  <div class="hero-bracket br"></div>
+
+  <div class="series-eyebrow">LLM Inference Engineering · Study Series</div>
+
+  <h1 class="hero-title">
+    <span class="hi">nano</span><span class="dim">-</span>vLLM<br>
+    <span style="font-size:0.55em;letter-spacing:-0.01em;color:var(--muted);font-weight:700;">Deep Dive</span>
+  </h1>
+
+  <p class="hero-sub">
+    An 11-chapter series on how large language model inference actually works —
+    built around the nano-vLLM codebase, explained from zero for beginners and
+    engineers alike.
+  </p>
+
+  <div class="hero-meta">
+    <div class="meta-item">
+      <span class="meta-num">11</span>
+      <span class="meta-label">Chapters</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-num">1,200</span>
+      <span class="meta-label">Lines of code</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-num">0</span>
+      <span class="meta-label">Prerequisites</span>
+    </div>
+    <div class="meta-item">
+      <span class="meta-num">~4 hrs</span>
+      <span class="meta-label">Total read time</span>
+    </div>
+  </div>
+
+  <div class="hero-cta">
+    <a href="ch01.html" class="btn-start">Start Chapter 01 →</a>
+    <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank" class="btn-repo">View on GitHub ↗</a>
+  </div>
+</header>
+
+<!-- ── PROGRESS BAR ── -->
+<div class="progress-bar" style="padding-top:2.5rem;">
+  <div class="pb-label">
+    <span>Your progress</span>
+    <span id="pb-text">0 of 11 chapters read</span>
+  </div>
+  <div class="pb-track">
+    <div class="pb-fill" id="pb-fill" style="width:0%"></div>
+  </div>
+</div>
+
+<!-- ── CHAPTER GRID ── -->
+<div class="section-wrap">
+  <div class="section-label">The Series</div>
+  <h2 class="section-title">11 chapters — start anywhere</h2>
+  <p class="section-sub">Each chapter is self-contained. Read in order for the full picture, or jump straight to any concept you want to understand. Cross-references keep everything connected.</p>
+
+  <div class="chapter-grid" id="chapter-grid">
+
+    <a href="ch01.html" class="ch-card" style="--card-accent:var(--accent);" data-ch="1">
+      <div class="ch-num">Chapter 01 · ~22 min</div>
+      <div class="ch-title">What Is LLM Inference?</div>
+      <div class="ch-desc">Tokens, autoregressive generation, training vs inference, Q/K/V attention, HBM vs SRAM, and the three core bottlenecks — built from scratch.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟦 Foundations</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch02.html" class="ch-card" style="--card-accent:var(--accent3);" data-ch="2">
+      <div class="ch-num">Chapter 02 · ~18 min</div>
+      <div class="ch-title">nano-vLLM Architecture</div>
+      <div class="ch-desc">The full file structure in ~1,200 lines. The CPU control plane vs GPU data plane design, and how each module connects to the others.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟩 Architecture</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch03.html" class="ch-card" style="--card-accent:var(--accent);" data-ch="3">
+      <div class="ch-num">Chapter 03 · ~20 min</div>
+      <div class="ch-title">KV Cache</div>
+      <div class="ch-desc">Why K and V are cached, the physical tensor layout in GPU memory, and the Triton kernel that writes to it with zero Python overhead on the hot path.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟦 Memory</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch04.html" class="ch-card" style="--card-accent:var(--accent2);" data-ch="4">
+      <div class="ch-num">Chapter 04 · ~22 min</div>
+      <div class="ch-title">PagedAttention</div>
+      <div class="ch-desc">Virtual memory for the KV cache. How fixed-size blocks, block tables, and a free list eliminate fragmentation and multiply concurrent request capacity.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟥 Memory Mgmt</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch05.html" class="ch-card" style="--card-accent:var(--accent4);" data-ch="5">
+      <div class="ch-num">Chapter 05 · ~20 min</div>
+      <div class="ch-title">The Scheduler</div>
+      <div class="ch-desc">Continuous batching from first principles. The waiting → running state machine, preemption, and why static batching wastes the GPU.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟨 Scheduling</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch06.html" class="ch-card" style="--card-accent:var(--accent3);" data-ch="6">
+      <div class="ch-num">Chapter 06 · ~18 min</div>
+      <div class="ch-title">Prefill vs Decode</div>
+      <div class="ch-desc">The two phases of inference side by side. Why prefill is compute-bound and decode is memory-bound, and what that means for batching strategy.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟩 Phases</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch07.html" class="ch-card" style="--card-accent:var(--accent);" data-ch="7">
+      <div class="ch-num">Chapter 07 · ~18 min</div>
+      <div class="ch-title">Prefix Caching</div>
+      <div class="ch-desc">Skip redundant prefill for shared system prompts. xxhash content-addressable blocks, reference counting, and when this wins big.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟦 Caching</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch08.html" class="ch-card" style="--card-accent:var(--accent4);" data-ch="8">
+      <div class="ch-num">Chapter 08 · ~16 min</div>
+      <div class="ch-title">Sampling Strategies</div>
+      <div class="ch-desc">Greedy, temperature, top-k, top-p — what each does to the logit distribution, when to use each, and the sampler code in nano-vLLM.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟨 Generation</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch09.html" class="ch-card" style="--card-accent:var(--accent2);" data-ch="9">
+      <div class="ch-num">Chapter 09 · ~20 min</div>
+      <div class="ch-title">Tensor Parallelism</div>
+      <div class="ch-desc">Splitting model weights across multiple GPUs. ColumnParallel and RowParallel linear layers, all-reduce, and when to use tensor parallelism vs pipeline parallelism.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟥 Distributed</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch10.html" class="ch-card" style="--card-accent:var(--accent3);" data-ch="10">
+      <div class="ch-num">Chapter 10 · ~24 min</div>
+      <div class="ch-title">Optimization Stack</div>
+      <div class="ch-desc">FlashAttention, CUDA Graphs, torch.compile, Triton KV kernels, GQA. Each technique, what bottleneck it targets, and how they layer together.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟩 Performance</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+    <a href="ch11.html" class="ch-card" style="--card-accent:var(--accent4);" data-ch="11">
+      <div class="ch-num">Chapter 11 · ~14 min</div>
+      <div class="ch-title">Benchmarks</div>
+      <div class="ch-desc">nano-vLLM vs vLLM — throughput numbers, what nano-vLLM includes vs omits, and how to read inference benchmarks without being misled.</div>
+      <div class="ch-footer">
+        <span class="ch-time">🟨 Results</span>
+        <span class="ch-arrow">→</span>
+      </div>
+    </a>
+
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ── CONCEPT STACK ── -->
+<div class="section-wrap">
+  <div class="section-label">What You'll Learn</div>
+  <h2 class="section-title">Five systems, one inference engine</h2>
+  <p class="section-sub">Understanding LLM inference means understanding five interacting systems simultaneously. This series builds each one from scratch, in the order they were designed.</p>
+
+  <div class="stack">
+    <div class="stack-layer" style="--layer-c:var(--accent);">
+      <span class="stack-num">01–02</span>
+      <span class="stack-name">Inference fundamentals</span>
+      <span class="stack-detail">Tokens, autoregressive generation, Q/K/V, HBM, the 6-step pipeline</span>
+      <a href="ch01.html" class="stack-link">Start →</a>
+    </div>
+    <div class="stack-layer" style="--layer-c:var(--accent);">
+      <span class="stack-num">03–04</span>
+      <span class="stack-name">KV cache & memory</span>
+      <span class="stack-detail">Physical layout, Triton kernels, PagedAttention, block tables</span>
+      <a href="ch03.html" class="stack-link">Read →</a>
+    </div>
+    <div class="stack-layer" style="--layer-c:var(--accent4);">
+      <span class="stack-num">05–06</span>
+      <span class="stack-name">Scheduling & batching</span>
+      <span class="stack-detail">Continuous batching, prefill vs decode, preemption</span>
+      <a href="ch05.html" class="stack-link">Read →</a>
+    </div>
+    <div class="stack-layer" style="--layer-c:var(--accent3);">
+      <span class="stack-num">07–08</span>
+      <span class="stack-name">Caching & sampling</span>
+      <span class="stack-detail">Prefix caching, xxhash blocks, greedy/top-k/temperature/top-p</span>
+      <a href="ch07.html" class="stack-link">Read →</a>
+    </div>
+    <div class="stack-layer" style="--layer-c:var(--accent2);">
+      <span class="stack-num">09–11</span>
+      <span class="stack-name">Distributed compute & performance</span>
+      <span class="stack-detail">Tensor parallelism, FlashAttention, CUDA Graphs, benchmarks</span>
+      <a href="ch09.html" class="stack-link">Read →</a>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ── ABOUT ── -->
+<div class="section-wrap">
+  <div class="section-label">About This Series</div>
+  <h2 class="section-title">Why nano-vLLM?</h2>
+  <p class="section-sub">Production vLLM is 100,000+ lines of C++, CUDA, and Python. Understanding it directly is hard. nano-vLLM reimplements the core ideas in ~1,200 lines of pure Python and Triton — readable in an afternoon, yet covering all the fundamental algorithms.</p>
+
+  <div class="callout insight">
+    <strong>The Philosophy</strong>
+    nano-vLLM was built by Xingkai Yu, a DeepSeek engineer whose name appears on the DeepSeek-V3 and DeepSeek-R1 papers. His goal was the same as this series: expose the algorithmic skeleton of production LLM inference, without the engineering complexity that hides it. 12,700+ GitHub stars and a growing ecosystem of forks and extensions suggest it worked.
+  </div>
+
+  <div class="about-grid">
+    <div class="about-card">
+      <h4>Who this is for</h4>
+      <p>Engineers curious about how LLMs work under the hood. ML practitioners who use LLM APIs but want to understand what's happening beneath <code>generate()</code>. Anyone who's heard "KV cache" or "PagedAttention" and wants a real explanation, not a handwave.</p>
+      <div class="pill-row">
+        <span class="pill pill-cyan">Software engineers</span>
+        <span class="pill pill-lime">ML practitioners</span>
+        <span class="pill pill-amber">Curious learners</span>
+      </div>
+    </div>
+    <div class="about-card">
+      <h4>What you actually need</h4>
+      <p>Basic Python literacy helps but isn't required — all code is annotated line by line. No prior ML, no linear algebra, no CUDA knowledge assumed. New terms are always defined before they're used, with a real-world analogy first.</p>
+      <div class="pill-row">
+        <span class="pill pill-lime">Basic Python (helpful)</span>
+        <span class="pill pill-amber">No ML required</span>
+        <span class="pill pill-cyan">No CUDA required</span>
+      </div>
+    </div>
+    <div class="about-card">
+      <h4>Each chapter includes</h4>
+      <p>An opening real-world analogy. Full concept explanation from first principles. At least one interactive visual. Annotated nano-vLLM source code. A "why it matters" callout. Common misconceptions. A 3-question quiz with full feedback. Key takeaways grid.</p>
+      <div class="pill-row">
+        <span class="pill pill-cyan">Analogies</span>
+        <span class="pill pill-lime">Interactive demos</span>
+        <span class="pill pill-amber">Quizzes</span>
+        <span class="pill pill-red">Real code</span>
+      </div>
+    </div>
+    <div class="about-card">
+      <h4>The codebase</h4>
+      <p>All code examples come directly from <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank" style="color:var(--accent);text-decoration:none;">GeeeekExplorer/nano-vllm</a> on GitHub. The repo is MIT-licensed. We follow the actual implementation — not pseudocode, not simplified stand-ins. Every snippet you see runs.</p>
+      <div class="pill-row">
+        <span class="pill pill-cyan">MIT License</span>
+        <span class="pill pill-lime">Real code, not pseudocode</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ── READY CTA ── -->
+<div class="section-wrap" style="text-align:center;padding-bottom:6rem;">
+  <div class="section-label" style="justify-content:center;display:flex;">Get started</div>
+  <h2 class="section-title" style="max-width:500px;margin:0 auto 0.75rem;">Ready? Chapter 01 takes about 22 minutes.</h2>
+  <p class="section-sub" style="margin:0 auto 2rem;">It covers everything that happens between you typing a message and seeing a response — from raw characters to autoregressive token generation.</p>
+  <a href="ch01.html" style="display:inline-block;font-family:'Space Mono',monospace;font-size:0.75rem;letter-spacing:0.1em;text-transform:uppercase;text-decoration:none;padding:0.8rem 2rem;border-radius:3px;background:var(--accent);color:#000;font-weight:700;transition:all 0.2s;" onmouseover="this.style.background='#00c8e0'" onmouseout="this.style.background='var(--accent)'">Begin Chapter 01 →</a>
+</div>
+
+<!-- ── FOOTER ── -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-links">
+      <a href="ch01.html">Chapter 01</a>
+      <a href="ch02.html">Chapter 02</a>
+      <a href="ch03.html">Chapter 03</a>
+      <a href="ch04.html">Chapter 04</a>
+      <a href="ch05.html">Chapter 05</a>
+      <a href="ch06.html">Chapter 06</a>
+      <a href="ch07.html">Chapter 07</a>
+      <a href="ch08.html">Chapter 08</a>
+      <a href="ch09.html">Chapter 09</a>
+      <a href="ch10.html">Chapter 10</a>
+      <a href="ch11.html">Chapter 11</a>
+      <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">GitHub ↗</a>
+    </div>
+    <div class="footer-credit">
+      Based on <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">nano-vLLM</a> by Xingkai Yu · MIT License · Study series
+    </div>
+  </div>
+</footer>
+
+<!-- ── SCRIPTS ── */
+<script>
+(function(){
+
+  /* ── progress tracker ── */
+  const keys=['ch01','ch02','ch03','ch04','ch05','ch06','ch07','ch08','ch09','ch10','ch11'];
+  let visited=0;
+  keys.forEach((k,i)=>{
+    if(localStorage.getItem(k)==='1'){
+      visited++;
+      const card=document.querySelector(`[data-ch="${i+1}"]`);
+      if(card) card.classList.add('visited');
+    }
+  });
+  const pct=Math.round((visited/keys.length)*100);
+  document.getElementById('pb-fill').style.width=pct+'%';
+  document.getElementById('pb-text').textContent=`${visited} of ${keys.length} chapters read`;
+
+  /* ── card hover glow ── */
+  document.querySelectorAll('.ch-card').forEach(card=>{
+    card.addEventListener('mousemove',e=>{
+      const r=card.getBoundingClientRect();
+      const x=e.clientX-r.left;
+      const y=e.clientY-r.top;
+      card.style.background=`radial-gradient(200px circle at ${x}px ${y}px, rgba(0,229,255,0.04), var(--surface) 70%)`;
+    });
+    card.addEventListener('mouseleave',()=>{
+      card.style.background='var(--surface)';
+    });
+  });
+
+})();
+</script>
+</body>
+</html>
