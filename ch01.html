@@ -74,13 +74,14 @@ main{max-width:900px;margin:0 auto;padding:4rem 2rem 6rem;}
 
 /* ── CALLOUT ── */
 .callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.88rem;line-height:1.8;}
-.callout strong{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+/* Only the first <strong> (the label) gets block display — inline strongs stay inline */
+.callout>strong:first-child{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
 .callout.info{border-color:var(--accent);background:rgba(0,229,255,0.05);}
-.callout.info strong{color:var(--accent);}
+.callout.info>strong:first-child{color:var(--accent);}
 .callout.warn{border-color:var(--accent4);background:rgba(255,179,71,0.05);}
-.callout.warn strong{color:var(--accent4);}
+.callout.warn>strong:first-child{color:var(--accent4);}
 .callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.05);}
-.callout.insight strong{color:var(--accent3);}
+.callout.insight>strong:first-child{color:var(--accent3);}
 
 /* ── CODE ── */
 .code-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);padding:0.2rem 0.6rem;border-radius:2px;display:inline-block;margin-bottom:0.5rem;}
