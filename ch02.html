@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nano-vLLM · Ch02 · Architecture</title>
+<meta name="description" content="A beginner-friendly walkthrough of nano-vLLM's architecture — the file structure, the CPU control plane vs GPU data plane design, and how every module connects.">
+<meta property="og:title" content="nano-vLLM Ch02 — Architecture">
+<meta property="og:description" content="How 1,200 lines of Python are organized to run LLM inference — every file, every responsibility, every connection explained.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ── */
+:root{
+  --bg:      #08090d;
+  --surface: #0f1117;
+  --surface2:#161a24;
+  --border:  #1e2535;
+  --accent:  #00e5ff;
+  --accent2: #ff4d6d;
+  --accent3: #b4ff6f;
+  --accent4: #ffb347;
+  --text:    #e2e8f4;
+  --muted:   #6b7a99;
+  --code-bg: #0a0e1a;
+  --ch-accent: var(--accent3); /* Ch02 dominant: lime */
+}
+
+/* ── RESET ── */
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden;}
+
+/* ── SCAN LINES ── */
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9999;}
+
+/* ── NAV ── */
+.top-nav{position:sticky;top:0;z-index:100;background:rgba(8,9,13,0.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 1.5rem;display:flex;gap:0;overflow-x:auto;scrollbar-width:none;}
+.top-nav::-webkit-scrollbar{display:none;}
+.top-nav a{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:0.85rem 0.9rem;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.2s;}
+.top-nav a:hover{color:var(--accent3);}
+.top-nav a.active{color:var(--accent3);border-bottom-color:var(--accent3);}
+
+/* ── HERO ── */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:4rem 2rem;position:relative;overflow:hidden;}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(180,255,111,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(180,255,111,0.03) 1px,transparent 1px);background-size:60px 60px;animation:gridDrift 20s linear infinite;}
+@keyframes gridDrift{from{transform:translate(0,0);}to{transform:translate(60px,60px);}}
+.hero-glow{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(180,255,111,0.06) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 6s ease-in-out infinite;}
+@keyframes glowPulse{0%,100%{opacity:0.5;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.12);}}
+.series-badge{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;color:var(--accent3);border:1px solid rgba(180,255,111,0.3);padding:0.3rem 1rem;border-radius:2px;background:rgba(180,255,111,0.05);text-transform:uppercase;position:relative;z-index:1;animation:fadeUp 0.6s ease both;}
+.chapter-num{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(5rem,15vw,10rem);line-height:1;color:var(--accent3);opacity:0.12;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.05s both;letter-spacing:-0.05em;}
+.hero h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(2rem,5vw,3.5rem);line-height:1.1;letter-spacing:-0.02em;margin-top:-0.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.1s both;}
+.hero-sub{font-size:1rem;font-weight:300;color:var(--muted);max-width:560px;margin:1rem auto 2.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.15s both;}
+.hero-nav{display:flex;gap:1rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.2s both;flex-wrap:wrap;justify-content:center;}
+.hero-nav a{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;transition:all 0.2s;}
+.btn-primary{background:var(--accent3);color:#000;font-weight:700;}
+.btn-primary:hover{background:#9be855;}
+.btn-ghost{border:1px solid var(--border);color:var(--muted);}
+.btn-ghost:hover{border-color:var(--accent3);color:var(--accent3);}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── MAIN ── */
+main{max-width:900px;margin:0 auto;padding:4rem 2rem 6rem;}
+
+/* ── SECTION ── */
+.section{margin-bottom:5rem;}
+.section-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--ch-accent);text-transform:uppercase;margin-bottom:0.6rem;}
+.section h2{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(1.6rem,3.5vw,2.4rem);line-height:1.1;margin-bottom:1.25rem;letter-spacing:-0.02em;}
+.section h3{font-family:'Syne',sans-serif;font-weight:700;font-size:1.15rem;margin:2.5rem 0 0.75rem;}
+.lead{font-size:0.95rem;color:var(--muted);max-width:720px;margin-bottom:1.75rem;line-height:1.85;}
+
+/* ── DIVIDER ── */
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:3.5rem 0;}
+
+/* ── CALLOUT ── */
+.callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.88rem;line-height:1.8;}
+/* Only the first <strong> (the label) gets block display — inline strongs stay inline */
+.callout>strong:first-child{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+.callout.info{border-color:var(--accent);background:rgba(0,229,255,0.05);}
+.callout.info>strong:first-child{color:var(--accent);}
+.callout.warn{border-color:var(--accent4);background:rgba(255,179,71,0.05);}
+.callout.warn>strong:first-child{color:var(--accent4);}
+.callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.05);}
+.callout.insight>strong:first-child{color:var(--accent3);}
+
+/* ── CODE ── */
+.code-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent3);background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.2);padding:0.2rem 0.6rem;border-radius:2px;display:inline-block;margin-bottom:0.5rem;}
+pre{background:var(--code-bg);border:1px solid var(--border);border-left:3px solid var(--accent3);border-radius:4px;padding:1.5rem;overflow-x:auto;font-family:'Space Mono',monospace;font-size:0.76rem;line-height:1.85;color:#c9d6ef;margin:0.5rem 0 1.5rem;}
+pre .comment{color:#3d4f6b;font-style:italic;}
+pre .keyword{color:var(--accent2);}
+pre .string{color:var(--accent3);}
+pre .num{color:var(--accent4);}
+pre .fn{color:var(--accent);}
+pre .cls{color:#c792ea;}
+code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.15);padding:0.1em 0.4em;border-radius:3px;color:var(--accent3);}
+
+/* ── CARDS ── */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1.25rem;margin:1.5rem 0;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;transition:border-color 0.25s,transform 0.25s;}
+.card:hover{border-color:var(--card-accent,var(--accent3));transform:translateY(-3px);}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--card-accent,var(--accent3));}
+.card h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.5rem;}
+.card p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── DIAGRAM ── */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2rem;margin:1.5rem 0;position:relative;}
+.diagram-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);position:absolute;top:1rem;right:1.25rem;}
+
+/* ── FILE TREE ── */
+.file-tree{background:var(--code-bg);border:1px solid var(--border);border-left:3px solid var(--accent3);border-radius:4px;padding:1.5rem;font-family:'Space Mono',monospace;font-size:0.76rem;line-height:2.1;}
+.ft-row{display:flex;align-items:baseline;gap:0;cursor:pointer;border-radius:3px;padding:0 0.5rem;margin:0 -0.5rem;transition:background 0.15s;}
+.ft-row:hover{background:rgba(180,255,111,0.05);}
+.ft-row.active{background:rgba(180,255,111,0.08);}
+.ft-indent{display:inline-block;}
+.ft-dir{color:var(--accent3);}
+.ft-file{color:var(--text);}
+.ft-desc{color:var(--muted);font-size:0.68rem;margin-left:0.5rem;}
+.ft-badge{font-size:0.58rem;padding:0.1rem 0.4rem;border-radius:2px;margin-left:0.5rem;vertical-align:middle;}
+.ft-badge-cpu{background:rgba(0,229,255,0.1);color:var(--accent);border:1px solid rgba(0,229,255,0.2);}
+.ft-badge-gpu{background:rgba(255,77,109,0.1);color:var(--accent2);border:1px solid rgba(255,77,109,0.2);}
+.ft-badge-shared{background:rgba(255,179,71,0.1);color:var(--accent4);border:1px solid rgba(255,179,71,0.2);}
+
+/* file detail panel */
+.file-detail{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;margin-top:1rem;min-height:120px;font-size:0.85rem;line-height:1.8;}
+.file-detail-name{font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--accent3);margin-bottom:0.5rem;letter-spacing:0.08em;}
+.file-detail-role{font-weight:500;color:var(--text);margin-bottom:0.5rem;}
+.file-detail-body{color:var(--muted);}
+
+/* ── LAYER DIAGRAM ── */
+.arch-layers{display:flex;flex-direction:column;gap:4px;}
+.arch-layer{border-radius:4px;padding:0.9rem 1.25rem;display:flex;align-items:center;gap:1rem;cursor:pointer;transition:all 0.2s;border:1px solid transparent;}
+.arch-layer:hover{transform:translateX(4px);}
+.arch-layer-num{font-family:'Space Mono',monospace;font-size:0.62rem;font-weight:700;min-width:24px;}
+.arch-layer-name{font-family:'Syne',sans-serif;font-weight:700;font-size:0.9rem;flex:1;}
+.arch-layer-files{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);margin-left:auto;text-align:right;}
+.arch-layer-arrow{font-size:0.8rem;margin-left:0.5rem;transition:transform 0.2s;}
+
+/* ── PLANE SPLIT ── */
+.plane-split{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin:1.5rem 0;}
+.plane-box{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;}
+.plane-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;}
+.plane-cpu::before{background:var(--accent);}
+.plane-gpu::before{background:var(--accent2);}
+.plane-tag{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;display:block;margin-bottom:0.6rem;}
+.plane-cpu .plane-tag{color:var(--accent);}
+.plane-gpu .plane-tag{color:var(--accent2);}
+.plane-box h4{font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;margin-bottom:0.9rem;}
+.plane-box ul{list-style:none;display:flex;flex-direction:column;gap:0.45rem;}
+.plane-box li{font-size:0.82rem;color:var(--muted);padding-left:1.1rem;position:relative;line-height:1.6;}
+.plane-cpu li::before{content:'→';position:absolute;left:0;color:var(--accent);font-size:0.72rem;}
+.plane-gpu li::before{content:'→';position:absolute;left:0;color:var(--accent2);font-size:0.72rem;}
+
+/* ── DATA FLOW ── */
+.flow{display:flex;flex-direction:column;gap:0;}
+.flow-step{display:flex;align-items:stretch;gap:0;}
+.flow-left{display:flex;flex-direction:column;align-items:center;width:40px;flex-shrink:0;}
+.flow-dot{width:12px;height:12px;border-radius:50%;border:2px solid;flex-shrink:0;margin-top:18px;}
+.flow-line{flex:1;width:2px;background:var(--border);}
+.flow-content{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem 1.25rem;margin:4px 0 4px 0;}
+.flow-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.25rem;}
+.flow-desc{font-size:0.82rem;color:var(--muted);line-height:1.65;}
+
+/* ── STEP ROW ── */
+.step-row{display:flex;gap:1rem;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.step-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.68rem;font-weight:700;flex-shrink:0;}
+.step-row h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.9rem;margin-bottom:0.3rem;}
+.step-row p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── QUIZ ── */
+.quiz-block{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;margin-bottom:1.25rem;}
+.quiz-block .q{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.9rem;}
+.quiz-opts{display:flex;flex-direction:column;gap:0.5rem;}
+.quiz-opts button{text-align:left;padding:0.6rem 1rem;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:0.85rem;line-height:1.5;transition:all 0.15s;}
+.quiz-opts button:hover:not(:disabled){border-color:var(--muted);color:var(--text);}
+.quiz-opts button.correct{background:rgba(180,255,111,0.1);border-color:rgba(180,255,111,0.4);color:var(--accent3);}
+.quiz-opts button.wrong{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.quiz-fb{display:none;margin-top:0.75rem;padding:0.75rem 1rem;border-radius:3px;font-size:0.82rem;line-height:1.7;}
+.quiz-fb.show{display:block;}
+.quiz-fb.ok{background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.2);color:var(--accent3);}
+.quiz-fb.no{background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);}
+
+/* ── TAKEAWAYS ── */
+.takeaways{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1.75rem;}
+.takeaways-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent3);margin-bottom:1.25rem;}
+.takeaway-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.85rem;}
+.takeaway-item{display:flex;gap:0.75rem;align-items:flex-start;}
+.takeaway-check{width:18px;height:18px;border-radius:2px;background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:3px;font-size:0.6rem;color:var(--accent3);font-weight:700;}
+.takeaway-item p{font-size:0.82rem;color:var(--muted);line-height:1.65;}
+.takeaway-item strong{color:var(--text);}
+
+/* ── XREF ── */
+.xref{font-family:'Space Mono',monospace;font-size:0.65rem;color:rgba(0,229,255,0.6);border:1px solid rgba(0,229,255,0.2);padding:0 0.3rem;border-radius:2px;margin-left:0.25rem;}
+
+/* ── MISCONCEPTIONS ── */
+.misconception{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:0 4px 4px 0;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.misconception .myth{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;color:var(--accent2);text-transform:uppercase;margin-bottom:0.3rem;}
+.misconception .reality{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+.misconception .reality strong{color:var(--text);}
+
+/* ── FOOTER ── */
+.chapter-footer{border-top:1px solid var(--border);margin-top:5rem;padding:2.5rem 2rem;text-align:center;}
+.footer-nav{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin-bottom:1.25rem;}
+.footer-credit{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);letter-spacing:0.08em;}
+.footer-credit a{color:var(--accent3);text-decoration:none;}
+
+/* ── RESPONSIVE ── */
+@media(max-width:640px){
+  .plane-split{grid-template-columns:1fr;}
+  .takeaway-grid{grid-template-columns:1fr;}
+  .hero-nav{flex-direction:column;align-items:center;}
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav class="top-nav">
+  <a href="index.html">Index</a>
+  <a href="ch01.html">01 · Inference</a>
+  <a href="ch02.html" class="active">02 · Architecture</a>
+  <a href="ch03.html">03 · KV Cache</a>
+  <a href="ch04.html">04 · PagedAttention</a>
+  <a href="ch05.html">05 · Scheduler</a>
+  <a href="ch06.html">06 · Prefill vs Decode</a>
+  <a href="ch07.html">07 · Prefix Caching</a>
+  <a href="ch08.html">08 · Sampling</a>
+  <a href="ch09.html">09 · Parallelism</a>
+  <a href="ch10.html">10 · Optimizations</a>
+  <a href="ch11.html">11 · Benchmarks</a>
+</nav>
+
+<!-- ── HERO ── -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="series-badge">Chapter 02 of 11 · nano-vLLM Deep Dive</div>
+  <div class="chapter-num">02</div>
+  <h1>nano-vLLM Architecture</h1>
+  <p class="hero-sub">How 1,200 lines of Python are organized to run a complete LLM inference engine — every file, every responsibility, and how they all connect.</p>
+  <div class="hero-nav">
+    <a href="ch01.html" class="btn-ghost">← Ch01: Inference</a>
+    <a href="ch03.html" class="btn-primary">Next: KV Cache →</a>
+  </div>
+</header>
+
+<!-- ── MAIN ── -->
+<main>
+
+<!-- ══════════════════════════════
+     SECTION 1 — OPENING ANALOGY
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 1 — The Big Picture</div>
+  <h2>Why architecture matters</h2>
+  <p class="lead">Before touching any concept — KV cache, PagedAttention, scheduling — you need to know where those things live in the codebase. Architecture is the map. Without it, you're reading code in the dark.</p>
+
+  <div class="callout insight">
+    <strong>The Restaurant Kitchen Analogy</strong>
+    Think of nano-vLLM as a professional kitchen. There's a <strong>front-of-house</strong> (the waiter who takes orders, manages the queue, decides which table gets served next) and a <strong>back-of-house</strong> (the chefs doing the actual cooking on expensive equipment). The front-of-house never touches the stove. The back-of-house never talks to diners. Each has a single responsibility. nano-vLLM is designed exactly this way — a <strong>CPU control plane</strong> that manages requests and memory metadata, and a <strong>GPU data plane</strong> that executes the actual model computation. They communicate through a thin, well-defined interface. Neither one does the other's job.
+  </div>
+
+  <p class="lead">This separation is not cosmetic — it's the key design decision that makes the entire engine fast. The CPU can make scheduling decisions without blocking the GPU, and the GPU can run compute without waiting for Python-level bookkeeping.</p>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 2 — THE FILE TREE (interactive)
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 2 — The Codebase</div>
+  <h2>Every file, explained</h2>
+  <p class="lead">The entire nano-vLLM codebase is ~1,200 lines across 11 files. Click any file below to see what it does, why it exists, and how it fits into the bigger picture.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Interactive file tree — click to explore</div>
+    <div class="file-tree" id="file-tree">
+
+      <div class="ft-row" data-file="root">
+        <span class="ft-dir">nanovllm/</span>
+      </div>
+
+      <div class="ft-row" data-file="llm" style="padding-left:1.5rem;">
+        <span class="ft-file">llm.py</span>
+        <span class="ft-badge ft-badge-shared">PUBLIC API</span>
+        <span class="ft-desc">— Entry point, the LLM class</span>
+      </div>
+
+      <div class="ft-row" data-file="engine" style="padding-left:1.5rem;">
+        <span class="ft-file">engine.py</span>
+        <span class="ft-badge ft-badge-shared">ORCHESTRATOR</span>
+        <span class="ft-desc">— LLMEngine, ties everything together</span>
+      </div>
+
+      <div class="ft-row" data-file="config" style="padding-left:1.5rem;">
+        <span class="ft-file">config.py</span>
+        <span class="ft-badge ft-badge-cpu">CPU</span>
+        <span class="ft-desc">— ModelConfig dataclass</span>
+      </div>
+
+      <div class="ft-row" data-file="sampler" style="padding-left:1.5rem;">
+        <span class="ft-file">sampler.py</span>
+        <span class="ft-badge ft-badge-gpu">GPU</span>
+        <span class="ft-desc">— Token sampling logic</span>
+      </div>
+
+      <div class="ft-row" data-file="cache" style="padding-left:1.5rem;">
+        <span class="ft-file">cache.py</span>
+        <span class="ft-badge ft-badge-gpu">GPU</span>
+        <span class="ft-desc">— KV cache tensor + Triton kernel</span>
+      </div>
+
+      <div class="ft-row" data-file="core" style="padding-left:1.5rem;">
+        <span class="ft-dir">core/</span>
+      </div>
+
+      <div class="ft-row" data-file="scheduler" style="padding-left:3rem;">
+        <span class="ft-file">scheduler.py</span>
+        <span class="ft-badge ft-badge-cpu">CPU</span>
+        <span class="ft-desc">— Continuous batching scheduler</span>
+      </div>
+
+      <div class="ft-row" data-file="block_manager" style="padding-left:3rem;">
+        <span class="ft-file">block_manager.py</span>
+        <span class="ft-badge ft-badge-cpu">CPU</span>
+        <span class="ft-desc">— PagedAttention block allocation</span>
+      </div>
+
+      <div class="ft-row" data-file="sequence" style="padding-left:3rem;">
+        <span class="ft-file">sequence.py</span>
+        <span class="ft-badge ft-badge-cpu">CPU</span>
+        <span class="ft-desc">— Sequence state machine</span>
+      </div>
+
+      <div class="ft-row" data-file="models" style="padding-left:1.5rem;">
+        <span class="ft-dir">models/</span>
+      </div>
+
+      <div class="ft-row" data-file="qwen3" style="padding-left:3rem;">
+        <span class="ft-file">qwen3.py</span>
+        <span class="ft-badge ft-badge-gpu">GPU</span>
+        <span class="ft-desc">— Full Qwen3 transformer</span>
+      </div>
+
+      <div class="ft-row" data-file="layers" style="padding-left:1.5rem;">
+        <span class="ft-dir">layers/</span>
+      </div>
+
+      <div class="ft-row" data-file="attention" style="padding-left:3rem;">
+        <span class="ft-file">attention.py</span>
+        <span class="ft-badge ft-badge-gpu">GPU</span>
+        <span class="ft-desc">— Paged flash attention</span>
+      </div>
+
+      <div class="ft-row" data-file="linear" style="padding-left:3rem;">
+        <span class="ft-file">linear.py</span>
+        <span class="ft-badge ft-badge-gpu">GPU</span>
+        <span class="ft-desc">— Parallel linear layers</span>
+      </div>
+    </div>
+
+    <!-- detail panel -->
+    <div class="file-detail" id="file-detail">
+      <div style="font-size:0.82rem;color:var(--muted);">← Click any file above to see its role, responsibilities, and how it connects to other modules.</div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 3 — CPU vs GPU PLANES
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 3 — The Core Design</div>
+  <h2>CPU control plane vs GPU data plane</h2>
+  <p class="lead">The single most important architectural decision in nano-vLLM — and in production vLLM — is the strict separation between what runs on the CPU and what runs on the GPU. Understanding this division makes everything else in the codebase make sense.</p>
+
+  <div class="plane-split">
+    <div class="plane-box plane-cpu">
+      <span class="plane-tag">CPU — control plane</span>
+      <h4>Manages metadata only</h4>
+      <ul>
+        <li>Runs the scheduler — decides which requests get processed each step</li>
+        <li>Runs the block manager — tracks which GPU memory blocks are free, in use, or shared</li>
+        <li>Maintains the sequence state machine — tracks where each request is in its lifecycle</li>
+        <li>Computes slot mappings — tells the GPU exactly where to write each token's KV data</li>
+        <li><strong style="color:var(--text)">Never touches GPU tensors directly</strong> — only works with integers, lists, and dictionaries</li>
+        <li>Runs in regular Python — no CUDA, no Triton</li>
+      </ul>
+    </div>
+    <div class="plane-box plane-gpu">
+      <span class="plane-tag">GPU — data plane</span>
+      <h4>Executes all computation</h4>
+      <ul>
+        <li>Runs the model — all transformer layers, attention, feed-forward</li>
+        <li>Writes K and V vectors to the KV cache using a Triton kernel <span class="xref">→ Ch.03</span></li>
+        <li>Reads the KV cache during attention via flash attention kernels</li>
+        <li>Applies sampling to logits to pick the next token <span class="xref">→ Ch.08</span></li>
+        <li><strong style="color:var(--text)">Never makes scheduling decisions</strong> — just executes what the CPU tells it</li>
+        <li>Runs in PyTorch + Triton — all tensor operations</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>Why this separation is fast</strong>
+    If the CPU and GPU were tangled — if the scheduler needed to inspect GPU tensors, or if the model runner needed to make allocation decisions — they'd constantly block each other. Synchronisation is expensive: every time Python waits for a GPU kernel to finish, that's dead time. By keeping the CPU on metadata and the GPU on tensors, both can do their work with minimal synchronisation. The CPU prepares the next batch's metadata while the GPU is still executing the current batch.
+  </div>
+
+  <h3>What "metadata" actually means</h3>
+  <p class="lead">When we say the CPU only manages metadata, we mean small, cheap Python data structures — not tensors:</p>
+
+  <div class="card-grid" style="grid-template-columns:repeat(3,1fr);">
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Block IDs</h4>
+      <p>Plain Python integers. Block 47, block 12, block 83. The CPU tracks which physical GPU memory blocks belong to which request — but never touches the actual memory at those locations.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Slot mappings</h4>
+      <p>A list of integers: <code>[slot_0, slot_1, ...]</code>. Each entry says "token N goes into slot M of the KV cache". The CPU computes this mapping; the GPU executes the write.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>Sequence state</h4>
+      <p>Python enums: WAITING, PREFILL, DECODING, FINISHED. The scheduler reads and writes these states to decide what runs next. No tensors involved — just state machine transitions.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 4 — LAYERED ARCHITECTURE (interactive)
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 4 — The Layers</div>
+  <h2>Four layers, one request</h2>
+  <p class="lead">When you call <code>llm.generate()</code>, your request passes through four distinct architectural layers. Each layer has exactly one responsibility and hands off to the next. Click each layer to understand its role.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Click a layer to expand</div>
+    <div class="arch-layers" id="arch-layers">
+
+      <div class="arch-layer" id="layer-api" data-layer="0"
+        style="background:rgba(180,255,111,0.08);border-color:rgba(180,255,111,0.3);">
+        <span class="arch-layer-num" style="color:var(--accent3);">L1</span>
+        <span class="arch-layer-name">Public API Layer</span>
+        <span class="arch-layer-files">llm.py</span>
+        <span class="arch-layer-arrow" style="color:var(--accent3);">▼</span>
+      </div>
+      <div id="expand-0" style="display:none;background:var(--surface2);border:1px solid rgba(180,255,111,0.2);border-radius:0 0 4px 4px;padding:1.25rem;margin-top:-4px;margin-bottom:4px;font-size:0.85rem;color:var(--muted);line-height:1.8;">
+        <strong style="color:var(--accent3);font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;">WHAT IT DOES</strong><br>
+        The <code>LLM</code> class is the only thing you import. It wraps the engine, manages the tokenizer, and exposes the <code>generate()</code> method. Its job is to be a clean, simple interface — you shouldn't need to know anything about the internals to call it.<br><br>
+        <strong style="color:var(--text);">Analogy:</strong> The restaurant's front door and hostess stand. Customers (you, the developer) interact only here. Everything behind it is invisible.
+      </div>
+
+      <div class="arch-layer" id="layer-engine" data-layer="1"
+        style="background:rgba(0,229,255,0.06);border-color:rgba(0,229,255,0.2);">
+        <span class="arch-layer-num" style="color:var(--accent);">L2</span>
+        <span class="arch-layer-name">Engine Layer</span>
+        <span class="arch-layer-files">engine.py</span>
+        <span class="arch-layer-arrow" style="color:var(--accent);">▼</span>
+      </div>
+      <div id="expand-1" style="display:none;background:var(--surface2);border:1px solid rgba(0,229,255,0.2);border-radius:0 0 4px 4px;padding:1.25rem;margin-top:-4px;margin-bottom:4px;font-size:0.85rem;color:var(--muted);line-height:1.8;">
+        <strong style="color:var(--accent);font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;">WHAT IT DOES</strong><br>
+        The <code>LLMEngine</code> is the orchestrator. It owns the scheduler <span class="xref">→ Ch.05</span>, the model runner, the tokenizer, and the KV cache <span class="xref">→ Ch.03</span>. Each call to <code>step()</code> on the engine: asks the scheduler what to run, passes that to the model runner, collects outputs, and feeds results back to waiting sequences.<br><br>
+        <strong style="color:var(--text);">Analogy:</strong> The head chef and kitchen manager rolled into one. Coordinates everything, delegates actual work to specialists.
+      </div>
+
+      <div class="arch-layer" id="layer-control" data-layer="2"
+        style="background:rgba(0,229,255,0.04);border-color:rgba(0,229,255,0.15);">
+        <span class="arch-layer-num" style="color:var(--accent);">L3</span>
+        <span class="arch-layer-name">Control Plane (CPU)</span>
+        <span class="arch-layer-files">scheduler.py · block_manager.py · sequence.py</span>
+        <span class="arch-layer-arrow" style="color:var(--accent);">▼</span>
+      </div>
+      <div id="expand-2" style="display:none;background:var(--surface2);border:1px solid rgba(0,229,255,0.15);border-radius:0 0 4px 4px;padding:1.25rem;margin-top:-4px;margin-bottom:4px;font-size:0.85rem;color:var(--muted);line-height:1.8;">
+        <strong style="color:var(--accent);font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;">WHAT IT DOES</strong><br>
+        Three files, three tightly-coupled responsibilities. The <strong style="color:var(--text);">Scheduler</strong> maintains two queues: requests waiting to start, and requests actively running. Each step it checks who's done, promotes waiting requests if memory allows, and handles preemption if the GPU is full. The <strong style="color:var(--text);">BlockManager</strong> tracks the physical GPU memory blocks using a free list — when a request gets scheduled, blocks are allocated from the list; when it finishes, they're returned. The <strong style="color:var(--text);">Sequence</strong> object is the state machine for a single request — it holds the token list, the block table, and the current phase (prefill or decode).<br><br>
+        <strong style="color:var(--text);">Analogy:</strong> The floor manager, the pantry keeper, and the order slip. All on the CPU, all working with plain data structures, none touching the stove.
+      </div>
+
+      <div class="arch-layer" id="layer-gpu" data-layer="3"
+        style="background:rgba(255,77,109,0.06);border-color:rgba(255,77,109,0.2);">
+        <span class="arch-layer-num" style="color:var(--accent2);">L4</span>
+        <span class="arch-layer-name">Data Plane (GPU)</span>
+        <span class="arch-layer-files">qwen3.py · attention.py · linear.py · cache.py · sampler.py</span>
+        <span class="arch-layer-arrow" style="color:var(--accent2);">▼</span>
+      </div>
+      <div id="expand-3" style="display:none;background:var(--surface2);border:1px solid rgba(255,77,109,0.2);border-radius:0 0 4px 4px;padding:1.25rem;margin-top:-4px;font-size:0.85rem;color:var(--muted);line-height:1.8;">
+        <strong style="color:var(--accent2);font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;">WHAT IT DOES</strong><br>
+        The GPU layer is where all the actual computation happens. <strong style="color:var(--text);">qwen3.py</strong> implements the full Qwen3 transformer — embedding layer, 28 transformer blocks (each with attention + feed-forward), and the final language model head that produces logits. <strong style="color:var(--text);">attention.py</strong> wraps flash attention with paged KV cache support — it reads K and V from scattered memory blocks using the block table. <strong style="color:var(--text);">linear.py</strong> implements tensor-parallel linear layers — ColumnParallel and RowParallel — for multi-GPU setups <span class="xref">→ Ch.09</span>. <strong style="color:var(--text);">cache.py</strong> holds the pre-allocated KV cache tensor and the Triton kernel that writes to it. <strong style="color:var(--text);">sampler.py</strong> converts raw logits to a sampled token via temperature, top-k, and softmax <span class="xref">→ Ch.08</span>.<br><br>
+        <strong style="color:var(--text);">Analogy:</strong> The stoves, the chefs, the ovens. All on the GPU. They receive instructions (slot mappings, block tables) from the CPU, execute the computation, and hand back results.
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 5 — DATA FLOW
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 5 — How a Request Flows</div>
+  <h2>One request's journey through the architecture</h2>
+  <p class="lead">Let's trace a single <code>generate()</code> call through every layer from the moment you call it to the moment you receive text back. Each hand-off between layers is where the CPU/GPU boundary matters most.</p>
+
+  <div class="flow">
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent3);background:rgba(180,255,111,0.15);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent3);">Step 1 — API Layer (llm.py)</div>
+        <div class="flow-desc">You call <code>llm.generate(["Hello world"], params)</code>. The <code>LLM</code> class tokenises the prompt string into a list of integer token IDs <span class="xref">→ Ch.01</span>, wraps it in a <code>Sequence</code> object with an initial state of WAITING, and adds it to the engine's request queue.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent);background:rgba(0,229,255,0.1);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent);">Step 2 — Engine Loop (engine.py)</div>
+        <div class="flow-desc">The engine runs a loop: call <code>scheduler.schedule()</code> to get this step's batch, call <code>model_runner.run()</code> with that batch, collect output token IDs, update sequences. Repeat until all sequences are FINISHED. This loop is the heartbeat of the entire system.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent);background:rgba(0,229,255,0.1);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent);">Step 3 — Scheduler (core/scheduler.py)</div>
+        <div class="flow-desc">The scheduler checks: is our sequence in WAITING? Does the block manager have enough free GPU memory blocks to fit its tokens? If yes, it transitions the sequence to PREFILL, allocates blocks via the block manager, and returns it as part of this step's batch. If no memory, the sequence stays in WAITING.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent);background:rgba(0,229,255,0.1);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent);">Step 4 — Block Manager (core/block_manager.py)</div>
+        <div class="flow-desc">The block manager pops blocks from its free list and assigns them to the sequence's block table — a Python list like <code>[47, 12, 83]</code>. It also computes the slot mapping: for each token position, which exact slot in the physical KV cache should that token's K and V be written to. This integer list is handed to the GPU.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent2);background:rgba(255,77,109,0.1);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent2);">Step 5 — Model Runner / GPU (qwen3.py + cache.py + attention.py)</div>
+        <div class="flow-desc">The model runner takes the token IDs and slot mapping from the CPU. It runs the Qwen3 transformer: embedding → 28 attention+FFN layers → language model head → logits. During each attention layer, K and V for new tokens are written to the KV cache using the Triton kernel. Attention reads the paged KV cache using the block table.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent4);background:rgba(255,179,71,0.1);"></div>
+        <div class="flow-line"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent4);">Step 6 — Sampler (sampler.py)</div>
+        <div class="flow-desc">The raw logits (50,000 scores, one per vocab token) are passed to the sampler. Temperature scaling, top-k filtering, softmax, multinomial sampling — one token ID is selected. This ID goes back to the CPU.</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-left">
+        <div class="flow-dot" style="border-color:var(--accent3);background:rgba(180,255,111,0.1);"></div>
+      </div>
+      <div class="flow-content">
+        <div class="flow-label" style="color:var(--accent3);">Step 7 — Back to CPU → Loop or Finish</div>
+        <div class="flow-desc">The engine appends the new token ID to the sequence. If it's an EOS token or we've hit max_tokens, the sequence transitions to FINISHED and the block manager returns its blocks to the free list. Otherwise the sequence transitions to DECODING and the loop runs again from Step 2 — this time processing only the one new token.</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 6 — CODE IN NANO-VLLM
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 6 — In nano-vLLM</div>
+  <h2>The engine loop in code</h2>
+  <p class="lead">The engine's <code>step()</code> method is the core of the architecture — it calls the scheduler, runs the model, and updates sequences. Here it is, annotated:</p>
+
+  <div class="code-label">engine.py — the core step() loop</div>
+  <pre><span class="keyword">def</span> <span class="fn">step</span>(self) -> <span class="fn">list</span>[SequenceOutput]:
+    <span class="comment"># 1. Ask the CPU scheduler what to run this step.
+    #    Returns prefill sequences + decode sequences as a batch.</span>
+    scheduler_output = self.scheduler.<span class="fn">schedule</span>()
+
+    <span class="comment"># 2. If nothing to run (all requests waiting for memory), return empty.</span>
+    <span class="keyword">if not</span> scheduler_output.<span class="fn">has_work</span>():
+        <span class="keyword">return</span> []
+
+    <span class="comment"># 3. Hand the batch to the GPU model runner.
+    #    This is where the transformer forward pass happens.
+    #    Returns one sampled token ID per sequence in the batch.</span>
+    sampled_tokens = self.model_runner.<span class="fn">run</span>(scheduler_output)
+
+    <span class="comment"># 4. Update each sequence with its new token.
+    #    The scheduler handles state transitions (prefill → decode,
+    #    decode → finished) and block deallocation on completion.</span>
+    outputs = self.scheduler.<span class="fn">update</span>(sampled_tokens)
+
+    <span class="keyword">return</span> outputs  <span class="comment"># list of (sequence_id, token_id, is_finished)</span></pre>
+
+  <div class="callout info">
+    <strong>Why step() is so small</strong>
+    The engine's step function is intentionally thin — just 4 lines of real logic. All the complexity lives in the modules it delegates to: the scheduler handles batching and state, the model runner handles GPU compute, the block manager handles memory. This layering means you can read and understand each piece independently. That's the entire point of the architecture.
+  </div>
+
+  <h3>The Sequence object — the unit of work</h3>
+  <p class="lead">Every request is represented as a <code>Sequence</code> object. It's the single piece of state that flows between the CPU control plane and GPU data plane:</p>
+
+  <div class="code-label">core/sequence.py — what a Sequence holds</div>
+  <pre><span class="keyword">class</span> <span class="cls">Sequence</span>:
+    <span class="keyword">def</span> <span class="fn">__init__</span>(self, prompt_tokens: <span class="fn">list</span>[<span class="cls">int</span>], params: <span class="cls">SamplingParams</span>):
+        self.tokens = prompt_tokens    <span class="comment"># all token IDs so far (grows with each decode step)</span>
+        self.params = params           <span class="comment"># temperature, top_k, max_tokens etc.</span>
+
+        <span class="comment"># CPU metadata — managed by the block manager</span>
+        self.block_table: <span class="fn">list</span>[<span class="cls">int</span>] = []   <span class="comment"># [physical_block_id, ...] for this sequence</span>
+
+        <span class="comment"># State machine — managed by the scheduler</span>
+        self.status = SequenceStatus.WAITING   <span class="comment"># WAITING → PREFILL → DECODING → FINISHED</span>
+        self.is_prefill = <span class="keyword">True</span>               <span class="comment"># True until first token is generated</span>
+
+        <span class="comment"># Output accumulator</span>
+        self.output_tokens: <span class="fn">list</span>[<span class="cls">int</span>] = []  <span class="comment"># generated token IDs (not including prompt)</span></pre>
+
+  <div class="callout insight">
+    <strong>The block_table is the bridge</strong>
+    Notice that <code>block_table</code> is just a Python list of integers — CPU-side metadata. But it controls exactly where on the GPU the KV cache data lives. The CPU computes the block table, the GPU reads it through the slot mapping. This is the interface between the two planes — a tiny list of numbers that carries enormous semantic weight.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 7 — WHY IT MATTERS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 7 — Why It Matters</div>
+  <h2>What this architecture enables</h2>
+  <p class="lead">The CPU/GPU separation and the four-layer design aren't just clean code — they're what makes the performance features in later chapters possible.</p>
+
+  <div class="card-grid">
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Enables PagedAttention</h4>
+      <p>Because the block manager runs entirely on the CPU with plain Python data structures, it can make complex allocation decisions (free lists, reference counting, prefix caching) without ever stalling the GPU. <span class="xref">→ Ch.04</span></p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Enables continuous batching</h4>
+      <p>The scheduler can add or remove requests from the batch every single step — because it only manipulates metadata. Swapping a sequence in or out is just a list operation on the CPU, not a GPU reallocation. <span class="xref">→ Ch.05</span></p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>Enables CUDA Graphs</h4>
+      <p>The GPU data plane is stateless from step to step — it just executes whatever the CPU tells it. This predictability lets the decode step be captured as a CUDA Graph and replayed with zero Python overhead. <span class="xref">→ Ch.10</span></p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>Enables tensor parallelism</h4>
+      <p>Because the GPU data plane is cleanly isolated in <code>models/</code> and <code>layers/</code>, adding tensor parallelism only required modifying the linear layers and attention. The CPU control plane needed zero changes. <span class="xref">→ Ch.09</span></p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 8 — MISCONCEPTIONS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 8 — Common Mistakes</div>
+  <h2>Things beginners get wrong about LLM architecture</h2>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 1 — "The GPU manages its own memory"</div>
+    <div class="reality"><strong>Reality:</strong> The GPU has no concept of "requests" or "blocks". It just executes kernel operations on tensors. All memory management logic — the free list, block tables, slot mappings — runs on the CPU in pure Python. The GPU is told exactly where to read and write; it never decides on its own.</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 2 — "More code = more features"</div>
+    <div class="reality"><strong>Reality:</strong> nano-vLLM deliberately stays at ~1,200 lines. Every feature in production vLLM — speculative decoding, quantization, beam search, multi-modal inputs — adds thousands of lines that obscure the core algorithms. nano-vLLM's constraint is a feature: the algorithmic skeleton is always visible, never buried. Less code teaches more.</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 3 — "The engine runs one request at a time"</div>
+    <div class="reality"><strong>Reality:</strong> The engine's <code>step()</code> always processes a <em>batch</em> of sequences — some in prefill, some in decode, potentially dozens simultaneously. The scheduler builds this batch every step. This concurrent processing of multiple requests is what makes throughput high. A single request running alone is the worst case, not the design intent.</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 9 — QUIZ
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 9 — Check Your Understanding</div>
+  <h2>Quiz</h2>
+  <p class="lead">Three questions on the architecture. Wrong answers tell you exactly why they're wrong.</p>
+
+  <div class="quiz-block">
+    <p class="q">1. The block manager tracks which GPU memory blocks are free. Where does it run?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(1,'a',false,'The block manager never runs on the GPU. It is pure Python — a free list of integer block IDs, reference counts, and hash mappings. Running it on the GPU would require CUDA code and would couple scheduling decisions to tensor operations, killing performance.')">On the GPU — it needs to inspect the tensor memory directly</button>
+      <button onclick="quiz(1,'b',true,'Correct. The block manager is pure Python on the CPU. It tracks only integer metadata — block IDs, reference counts, hash-to-block mappings. It never touches GPU tensors. This is the CPU/GPU separation that makes the architecture fast.')">On the CPU — it only manages integer metadata, never GPU tensors</button>
+      <button onclick="quiz(1,'c',false,'There is no separate memory management GPU. The block manager runs on the host CPU, and the compute GPU executes the transformer. They communicate through slot mappings and block tables.')">On a separate memory management GPU</button>
+    </div>
+    <div class="quiz-fb" id="fb1"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">2. What does the engine's step() function return?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(2,'a',false,'step() returns only the tokens sampled in that single step — typically one per active sequence. The full generated text is accumulated in the Sequence object across many steps, then detokenised at the end.')">The complete generated text for all finished requests</button>
+      <button onclick="quiz(2,'b',false,'step() does not return logits — logits are an intermediate GPU result consumed immediately by the sampler. By the time step() returns to the engine, logits have already been converted to token IDs.')">The raw logit scores from the model</button>
+      <button onclick="quiz(2,'c',true,'Correct. Each call to step() runs one iteration of the engine loop — schedule, run model, sample — and returns the token IDs sampled this step for each active sequence, plus a flag indicating whether each sequence has finished. The caller loops until all are done.')">One sampled token ID per active sequence, plus a finished flag</button>
+    </div>
+    <div class="quiz-fb" id="fb2"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">3. Why does nano-vLLM use a Sequence object to represent each request?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(3,'a',false,'Serialisation for disk/network storage is not the purpose of the Sequence object. It is an in-memory state machine that holds everything the CPU and GPU need to know about an active request — token list, block table, status, and sampling params.')">To serialise requests for disk storage between steps</button>
+      <button onclick="quiz(3,'b',true,'Correct. The Sequence object is the shared state between the CPU control plane and GPU data plane. The CPU reads and writes its status, block_table, and token list. The GPU receives its token IDs and block table as inputs. Everything about a request that matters lives in one object — a clean, inspectable unit of work.')">To hold the shared state between CPU scheduling logic and GPU compute in one place</button>
+      <button onclick="quiz(3,'c',false,'nano-vLLM does not use multi-threading for parallelism across requests — it uses continuous batching on a single thread, processing multiple sequences simultaneously in each model forward pass. The Sequence object is a state container, not a threading primitive.')">To allow multi-threaded parallel processing of each request</button>
+    </div>
+    <div class="quiz-fb" id="fb3"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 10 — TAKEAWAYS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 10 — Key Takeaways</div>
+  <h2>What you now know</h2>
+
+  <div class="takeaways">
+    <div class="takeaways-label">Chapter 02 — Summary</div>
+    <div class="takeaway-grid">
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>CPU controls, GPU computes.</strong> The CPU control plane manages scheduling and memory metadata in pure Python. The GPU data plane executes the transformer. Neither does the other's job.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Four layers, one request.</strong> API → Engine → Control Plane → Data Plane. Each layer has one responsibility and hands off to the next through a well-defined interface.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Metadata stays on the CPU.</strong> Block IDs, slot mappings, and sequence state are plain Python integers and lists — cheap to compute, never touching GPU tensors.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>The Sequence object is the bridge.</strong> Its <code>block_table</code> and <code>tokens</code> list connect CPU scheduling decisions to GPU execution — a tiny list of integers with huge semantic weight.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>step() is the heartbeat.</strong> Every token generation is one call to step() — schedule, run, sample, update. The engine loop runs this until all sequences finish.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>The architecture enables everything ahead.</strong> PagedAttention, continuous batching, CUDA Graphs, tensor parallelism — all are possible because the CPU/GPU boundary is clean and explicit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ── FOOTER ── -->
+<footer class="chapter-footer">
+  <div class="footer-nav">
+    <a href="ch01.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;border:1px solid var(--border);color:var(--muted);transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent3)';this.style.color='var(--accent3)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">← Ch01: Inference</a>
+    <a href="index.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;border:1px solid var(--border);color:var(--muted);transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent3)';this.style.color='var(--accent3)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Series Index</a>
+    <a href="ch03.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;background:var(--accent3);color:#000;font-weight:700;transition:all 0.2s;" onmouseover="this.style.background='#9be855'" onmouseout="this.style.background='var(--accent3)'">Next: KV Cache →</a>
+  </div>
+  <div class="footer-credit">
+    nano-vLLM by <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">GeeeekExplorer</a> · Study series · MIT License
+  </div>
+</footer>
+
+<!-- ── SCRIPTS ── -->
+<script>
+(function(){
+
+/* ── mark visited ── */
+localStorage.setItem('ch02','1');
+
+/* ── file tree interaction ── */
+const FILE_DATA = {
+  root: {
+    name: 'nanovllm/',
+    role: 'Root package directory',
+    body: 'The top-level package. Running `from nanovllm import LLM` imports from here. The flat structure — most files at the top level — makes it easy to find anything quickly without navigating deep folder trees.'
+  },
+  llm: {
+    name: 'llm.py',
+    role: 'Public API — the only thing you import',
+    body: 'Contains the `LLM` class. It owns the tokenizer and wraps `LLMEngine`. Its `generate(prompts, params)` method is the only public interface — you tokenise inputs, submit them to the engine, loop until done, then detokenise outputs. ~80 lines. This is the "front door" of the system.'
+  },
+  engine: {
+    name: 'engine.py',
+    role: 'Orchestrator — the heartbeat of the system',
+    body: 'Contains `LLMEngine`. Owns the scheduler, model runner, and KV cache. Its `step()` method is called in a loop: schedule → run model → sample → update sequences → repeat. The thinnest possible glue between the CPU control plane and GPU data plane. ~150 lines.'
+  },
+  config: {
+    name: 'config.py',
+    role: 'Model configuration — a single dataclass',
+    body: 'A `ModelConfig` dataclass holding all model hyperparameters: number of layers, number of attention heads, number of KV heads (for GQA), hidden dimension, vocab size, dtype. Loaded once from the model\'s `config.json` file and passed everywhere. ~40 lines.'
+  },
+  sampler: {
+    name: 'sampler.py',
+    role: 'Token sampler — GPU-side, post-logit',
+    body: 'Takes raw logit tensors from the model and applies: temperature scaling (divide by temp), top-k filtering (zero out all but top-k), softmax, then multinomial sampling to pick one token ID per sequence. Runs on GPU as pure PyTorch operations. ~60 lines. Covered in depth in Ch.08.'
+  },
+  cache: {
+    name: 'cache.py',
+    role: 'KV cache — GPU tensor + Triton write kernel',
+    body: 'Pre-allocates a single large GPU tensor of shape [2, num_layers, num_blocks, block_size, num_kv_heads, head_dim] for all K and V data. Contains the `store_kvcache_kernel` Triton kernel that writes K and V to the correct slots using a slot mapping from the CPU. ~80 lines. Covered in depth in Ch.03.'
+  },
+  core: {
+    name: 'core/',
+    role: 'CPU control plane — all scheduling logic lives here',
+    body: 'Three files that together implement the CPU side of the engine. Nothing in core/ touches GPU tensors. Everything is pure Python operating on integers, lists, and enums. This is the "brain" of the system — the GPU is just the "muscle".'
+  },
+  scheduler: {
+    name: 'core/scheduler.py',
+    role: 'Continuous batching scheduler',
+    body: 'Maintains two data structures: `waiting` (deque of sequences not yet started) and `running` (list of active sequences). Each `schedule()` call: check who finished → free their blocks → try to promote waiting sequences → handle preemption if memory is tight → return the batch. ~150 lines. Covered in Ch.05.'
+  },
+  block_manager: {
+    name: 'core/block_manager.py',
+    role: 'PagedAttention block allocator',
+    body: 'Manages a pool of fixed-size GPU memory blocks using a free list (`list[int]`). `allocate(seq)` pops blocks from the free list and assigns them to a sequence\'s block_table. `free(seq)` returns them. Also handles prefix caching — hashing block token content and reusing matching blocks. ~120 lines. Covered in Ch.04 and Ch.07.'
+  },
+  sequence: {
+    name: 'core/sequence.py',
+    role: 'Sequence state machine — the unit of work',
+    body: 'Defines the `Sequence` dataclass and `SequenceStatus` enum (WAITING, PREFILL, DECODING, FINISHED). A Sequence holds: all token IDs, the block_table, sampling params, output tokens, and current status. It is the shared state between the CPU scheduler and the GPU model runner — the interface between the two planes.'
+  },
+  models: {
+    name: 'models/',
+    role: 'GPU model implementations',
+    body: 'Contains transformer model implementations. Currently only Qwen3 is implemented, but the architecture is general enough to add any decoder-only transformer by implementing a similar file.'
+  },
+  qwen3: {
+    name: 'models/qwen3.py',
+    role: 'Full Qwen3 transformer — the model itself',
+    body: 'Implements the complete Qwen3 architecture: token embeddings, 28 transformer blocks (each with RMSNorm → grouped-query attention → RMSNorm → SwiGLU feed-forward), and the final language model head. Uses the custom attention layer from layers/attention.py and parallel linear layers from layers/linear.py. ~300 lines — the largest file in the codebase.'
+  },
+  layers: {
+    name: 'layers/',
+    role: 'Reusable GPU layer implementations',
+    body: 'Custom layer implementations shared across model files. Keeps model code clean by abstracting the complexity of paged attention and tensor parallelism into reusable modules.'
+  },
+  attention: {
+    name: 'layers/attention.py',
+    role: 'Paged flash attention — the performance-critical layer',
+    body: 'Wraps flash attention with KV cache paging support. For prefill uses `flash_attn_varlen_func` (variable-length batches). For decode uses `flash_attn_with_kvcache` (reads paged K/V blocks). The block_table from the Sequence object is passed here to tell flash attention where in the KV cache to find each block. ~80 lines. Touched in Ch.03, Ch.04, Ch.10.'
+  },
+  linear: {
+    name: 'layers/linear.py',
+    role: 'Tensor-parallel linear layers',
+    body: 'Implements `ColumnParallelLinear` (splits output features across GPUs) and `RowParallelLinear` (splits input features, reduces with all_reduce). Used by qwen3.py for all the large matrix multiplications in attention (Q/K/V projections) and the feed-forward network. ~90 lines. Covered in Ch.09.'
+  }
+};
+
+document.querySelectorAll('.ft-row[data-file]').forEach(row=>{
+  row.addEventListener('click',()=>{
+    document.querySelectorAll('.ft-row').forEach(r=>r.classList.remove('active'));
+    row.classList.add('active');
+    const key=row.dataset.file;
+    const data=FILE_DATA[key];
+    if(!data)return;
+    document.getElementById('file-detail').innerHTML=`
+      <div class="file-detail-name">${data.name}</div>
+      <div class="file-detail-role">${data.role}</div>
+      <div class="file-detail-body">${data.body}</div>
+    `;
+  });
+});
+
+/* ── architecture layer expand/collapse ── */
+document.querySelectorAll('.arch-layer').forEach(layer=>{
+  layer.addEventListener('click',()=>{
+    const idx=layer.dataset.layer;
+    const panel=document.getElementById('expand-'+idx);
+    const arrow=layer.querySelector('.arch-layer-arrow');
+    const isOpen=panel.style.display!=='none';
+    // close all
+    document.querySelectorAll('[id^="expand-"]').forEach(p=>p.style.display='none');
+    document.querySelectorAll('.arch-layer-arrow').forEach(a=>a.textContent='▼');
+    // open this one if it was closed
+    if(!isOpen){
+      panel.style.display='block';
+      arrow.textContent='▲';
+    }
+  });
+});
+
+/* ── quiz ── */
+const CORRECT={1:'b',2:'c',3:'b'};
+window.quiz=function(n,opt,isCorrect,msg){
+  const fb=document.getElementById('fb'+n);
+  fb.textContent=msg;
+  fb.className='quiz-fb show '+(isCorrect?'ok':'no');
+  const block=fb.closest('.quiz-block');
+  const letters=['a','b','c'];
+  block.querySelectorAll('button').forEach((b,i)=>{
+    b.disabled=true;
+    if(letters[i]===opt&&!isCorrect)b.classList.add('wrong');
+    if(letters[i]===CORRECT[n])b.classList.add('correct');
+  });
+};
+
+})();
+</script>
+</body>
+</html>
