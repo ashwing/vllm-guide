@@ -304,20 +304,87 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,2
     Different layers in a transformer learn to attend to different kinds of patterns. Early layers might focus on syntax and nearby tokens. Later layers might focus on long-range semantic relationships. Each layer's K and V vectors encode that layer's specific "view" of a token — they're not interchangeable. Layer 3's K for the word "bank" is different from Layer 15's K for the same word.
   </div>
 
-  <h3>Per attention head — and GQA</h3>
-  <p class="lead">Within each layer, standard Multi-Head Attention (MHA) has multiple attention heads — each learning a different relationship pattern. Each head has its own K and V vectors. With 32 heads per layer, that's 32× the cache size per token per layer.</p>
+  <h3>Per attention head — what is an attention head?</h3>
+  <p class="lead">This is the part that trips most beginners up, so let's go slow. Recall from Chapter 01 <span class="xref">→ Ch.01</span> that attention works by comparing a Query vector against Key vectors and retrieving weighted Values. But a single round of Q/K/V comparison can only "look" for one kind of relationship at a time.</p>
 
-  <p class="lead"><strong style="color:var(--text)">Grouped Query Attention (GQA)</strong>, used in Qwen3 and LLaMA-3, reduces this. Instead of one K/V head per Q head, multiple Q heads share a single K/V head. Qwen3-1.7B uses 16 query heads but only 8 KV heads — halving the KV cache size with minimal quality loss. That's why you'll see <code>num_kv_heads=8</code> in nano-vLLM's config, separate from <code>num_heads=16</code>.</p>
+  <div class="callout insight">
+    <strong>The Committee of Experts Analogy</strong>
+    Imagine you're trying to understand a sentence by asking a committee of experts to analyse it simultaneously — each expert looks for something different. Expert 1 focuses on <em>grammar and word order</em>. Expert 2 focuses on <em>which nouns the pronouns refer to</em>. Expert 3 focuses on <em>sentiment and emotional tone</em>. Expert 4 focuses on <em>long-range topic connections</em>. Each expert runs their own Q/K/V analysis independently, in parallel. When they're done, their findings are combined. That committee is <strong>Multi-Head Attention</strong>. Each expert is one <strong>attention head</strong>.
+  </div>
 
-  <div class="card-grid" style="grid-template-columns:1fr 1fr;">
-    <div class="card" style="--card-accent:var(--accent2);">
-      <h4>Multi-Head Attention (MHA)</h4>
-      <p>Every query head has its own K and V head. Full expressiveness, but KV cache size = num_heads × layers × tokens × head_dim × 2. For a 70B model: enormous.</p>
+  <p class="lead">Concretely: within each transformer layer, instead of computing attention once, the model splits the computation into <code>num_heads</code> parallel "heads". Each head has its own learned Q, K, and V projection matrices — so the same input token produces a different Q, K, V for each head. Each head attends to the sequence independently, then the outputs are concatenated.</p>
+
+  <div class="diagram" style="padding:1.5rem;">
+    <div class="diagram-label">Multi-head attention — one token, one layer, 4 heads</div>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:1.5rem;align-items:center;margin-bottom:1rem;">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:0.7rem;color:var(--muted);margin-bottom:0.4rem;">INPUT TOKEN</div>
+        <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:1rem;color:var(--text);">"bank"</div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:0.3rem;">one embedding vector</div>
+      </div>
+      <div style="font-size:1.4rem;color:var(--muted);">→</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <div style="background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.25);border-radius:3px;padding:0.6rem;text-align:center;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.58rem;color:var(--accent);margin-bottom:0.2rem;">HEAD 1</div>
+          <div style="font-size:0.72rem;color:var(--muted);">grammar &amp; syntax</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--accent);margin-top:0.3rem;">K₁, V₁ → cache</div>
+        </div>
+        <div style="background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.25);border-radius:3px;padding:0.6rem;text-align:center;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.58rem;color:var(--accent3);margin-bottom:0.2rem;">HEAD 2</div>
+          <div style="font-size:0.72rem;color:var(--muted);">co-reference</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--accent3);margin-top:0.3rem;">K₂, V₂ → cache</div>
+        </div>
+        <div style="background:rgba(255,179,71,0.07);border:1px solid rgba(255,179,71,0.25);border-radius:3px;padding:0.6rem;text-align:center;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.58rem;color:var(--accent4);margin-bottom:0.2rem;">HEAD 3</div>
+          <div style="font-size:0.72rem;color:var(--muted);">semantic meaning</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--accent4);margin-top:0.3rem;">K₃, V₃ → cache</div>
+        </div>
+        <div style="background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.25);border-radius:3px;padding:0.6rem;text-align:center;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.58rem;color:var(--accent2);margin-bottom:0.2rem;">HEAD 4</div>
+          <div style="font-size:0.72rem;color:var(--muted);">long-range topic</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--accent2);margin-top:0.3rem;">K₄, V₄ → cache</div>
+        </div>
+      </div>
     </div>
-    <div class="card" style="--card-accent:var(--accent3);">
-      <h4>Grouped Query Attention (GQA)</h4>
-      <p>Multiple Q heads share one K/V head. KV cache size = num_kv_heads × layers × tokens × head_dim × 2. Qwen3-1.7B uses 8 KV heads vs 16 Q heads — cache is half the size of MHA.</p>
+    <p style="font-size:0.78rem;color:var(--muted);line-height:1.65;">Every head writes its own K and V to the KV cache independently. So one token in one layer writes <strong style="color:var(--text);">num_heads × 2</strong> vectors. A 28-layer model with 16 heads caches <strong style="color:var(--text);">28 × 16 × 2 = 896 vectors</strong> per token. Each vector is head_dim = 64 floats. That's 896 × 64 × 2 bytes = ~112 KB per token at fp16 for standard MHA.</p>
+  </div>
+
+  <div class="callout warn">
+    <strong>This is why the KV cache gets so large</strong>
+    Each token must store K and V for <em>every head in every layer</em>. A 70B model with 80 layers and 64 heads per layer (MHA) caches 80 × 64 × 2 = 10,240 vectors per token. At head_dim=128 and fp16: 10,240 × 128 × 2 = 2.6 MB per token. A 4,000-token conversation needs 10.4 GB just for the KV cache — before the model weights even come into the picture.
+  </div>
+
+  <h3>Grouped Query Attention — shrinking the cache</h3>
+  <p class="lead"><strong style="color:var(--text)">Grouped Query Attention (GQA)</strong> keeps the multiple-head benefit for Queries (each head still looks for something different) but shares K and V heads across groups of Q heads. If 2 Q heads share 1 KV head, the cache is half the size. If 4 Q heads share 1 KV head, it's a quarter.</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin:1.5rem 0;">
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:4px;padding:1.25rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent2);margin-bottom:0.75rem;">MHA — Multi-Head Attention</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:0.75rem;">
+        <div style="background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent);">Q₁<br>K₁<br>V₁</div>
+        <div style="background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent);">Q₂<br>K₂<br>V₂</div>
+        <div style="background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent);">Q₃<br>K₃<br>V₃</div>
+        <div style="background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent);">Q₄<br>K₄<br>V₄</div>
+      </div>
+      <p style="font-size:0.78rem;color:var(--muted);line-height:1.65;">4 Q heads → 4 KV head pairs. Cache stores <strong style="color:var(--text);">4 K + 4 V</strong> per token per layer. Full expressiveness, maximum memory.</p>
     </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent3);border-radius:4px;padding:1.25rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;color:var(--accent3);margin-bottom:0.75rem;">GQA — Grouped Query Attention (Qwen3)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:4px;">
+        <div style="background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">Q₁</div>
+        <div style="background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">Q₂</div>
+        <div style="background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">Q₃</div>
+        <div style="background:rgba(180,255,111,0.08);border:1px solid rgba(180,255,111,0.3);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">Q₄</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:0.75rem;">
+        <div style="background:rgba(180,255,111,0.12);border:1px solid rgba(180,255,111,0.4);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">K₁ V₁<br><span style="font-size:0.5rem;color:var(--muted);">shared by Q₁+Q₂</span></div>
+        <div style="background:rgba(180,255,111,0.12);border:1px solid rgba(180,255,111,0.4);border-radius:3px;padding:0.4rem;text-align:center;font-family:'Space Mono',monospace;font-size:0.55rem;color:var(--accent3);">K₂ V₂<br><span style="font-size:0.5rem;color:var(--muted);">shared by Q₃+Q₄</span></div>
+      </div>
+      <p style="font-size:0.78rem;color:var(--muted);line-height:1.65;">4 Q heads → only 2 KV head pairs. Cache stores <strong style="color:var(--text);">2 K + 2 V</strong> per token per layer. Half the memory, nearly identical quality.</p>
+    </div>
+
   </div>
 </section>
 
@@ -454,31 +521,121 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,2
 ══════════════════════════════ -->
 <section class="section">
   <div class="section-label">Section 6 — Visualising the Cache</div>
-  <h2>The KV cache block pool — interactive</h2>
-  <p class="lead">The cache is divided into fixed-size blocks. Each block holds <code>block_size</code> tokens (256 by default in nano-vLLM). Requests are allocated blocks from a free pool. When a request finishes, its blocks are returned. Use the buttons below to simulate the lifecycle.</p>
+  <h2>The KV cache block pool — interactive simulator</h2>
+  <p class="lead">The cache is divided into fixed-size blocks. Each block holds <code>block_size</code> tokens (256 by default). Requests are allocated blocks from a free pool; when they grow they get more; when they finish their blocks return instantly. Experiment below — add requests, grow them, finish them, and watch what happens when memory fills up.</p>
 
-  <div class="diagram">
-    <div class="diagram-label">Block pool simulator — 32 blocks, 256 tokens each</div>
+  <div class="diagram" style="padding:1.5rem 1.75rem;">
+    <div class="diagram-label">Block pool — 32 blocks, 256 tokens each</div>
 
-    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:1.25rem;">
-      <button onclick="kvSim('addA')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);color:var(--accent);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(0,229,255,0.2)'" onmouseout="this.style.background='rgba(0,229,255,0.1)'">+ Add Request A</button>
-      <button onclick="kvSim('addB')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(180,255,111,0.1);border:1px solid rgba(180,255,111,0.3);color:var(--accent3);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(180,255,111,0.2)'" onmouseout="this.style.background='rgba(180,255,111,0.1)'">+ Add Request B</button>
-      <button onclick="kvSim('addC')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(255,179,71,0.1);border:1px solid rgba(255,179,71,0.3);color:var(--accent4);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,179,71,0.2)'" onmouseout="this.style.background='rgba(255,179,71,0.1)'">+ Add Request C</button>
-      <button onclick="kvSim('freeA')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);color:var(--accent2);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,77,109,0.2)'" onmouseout="this.style.background='rgba(255,77,109,0.1)'">✓ Finish Request A</button>
-      <button onclick="kvSim('reset')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;">↺ Reset</button>
+    <!-- Stats row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.75rem;margin-bottom:1.25rem;">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:0.75rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.2rem;font-weight:700;color:var(--accent3);" id="stat-free">32</div>
+        <div style="font-size:0.62rem;color:var(--muted);margin-top:0.2rem;">Blocks free</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:0.75rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.2rem;font-weight:700;color:var(--accent);" id="stat-used">0</div>
+        <div style="font-size:0.62rem;color:var(--muted);margin-top:0.2rem;">Blocks in use</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:0.75rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.2rem;font-weight:700;color:var(--accent4);" id="stat-reqs">0</div>
+        <div style="font-size:0.62rem;color:var(--muted);margin-top:0.2rem;">Active requests</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:0.75rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.2rem;font-weight:700;color:var(--accent2);" id="stat-pct">0%</div>
+        <div style="font-size:0.62rem;color:var(--muted);margin-top:0.2rem;">Memory used</div>
+      </div>
     </div>
 
-    <div class="kv-grid" id="kv-grid" style="grid-template-columns:repeat(8,1fr);"></div>
+    <!-- Usage bar -->
+    <div style="margin-bottom:1.25rem;">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;height:10px;overflow:hidden;">
+        <div id="usage-bar" style="height:100%;border-radius:3px;background:linear-gradient(90deg,var(--accent),var(--accent3));transition:width 0.4s ease;width:0%;"></div>
+      </div>
+    </div>
 
-    <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:1rem;font-size:0.72rem;color:var(--muted);">
-      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(0,229,255,0.3);border:1px solid var(--accent);"></div>Request A</div>
-      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(180,255,111,0.25);border:1px solid var(--accent3);"></div>Request B</div>
-      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,179,71,0.2);border:1px solid var(--accent4);"></div>Request C</div>
-      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,77,109,0.1);border:1px solid var(--accent2);"></div>Freed (returned to pool)</div>
+    <!-- Block grid -->
+    <div id="kv-grid2" style="display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-bottom:1.25rem;"></div>
+
+    <!-- Legend -->
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem;font-size:0.7rem;color:var(--muted);">
       <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);"></div>Free</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(0,229,255,0.18);border:1px solid rgba(0,229,255,0.5);"></div>Request A</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.45);"></div>Request B</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,179,71,0.15);border:1px solid rgba(255,179,71,0.45);"></div>Request C</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(199,146,234,0.15);border:1px solid rgba(199,146,234,0.45);"></div>Request D</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.3);"></div>Just freed</div>
     </div>
 
-    <div style="margin-top:0.85rem;font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--muted);" id="kv-status">32 blocks free · 0 allocated</div>
+    <!-- Per-request controls -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:1.25rem;" id="req-controls">
+
+      <!-- Request A -->
+      <div style="background:var(--surface2);border:1px solid rgba(0,229,255,0.25);border-radius:4px;padding:0.85rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--accent);font-weight:700;">REQUEST A</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--muted);" id="req-a-info">not started</div>
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <button onclick="reqAction('A','start')" id="btn-a-start" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);color:var(--accent);border-radius:3px;cursor:pointer;">▶ Start (3 blocks)</button>
+          <button onclick="reqAction('A','grow')" id="btn-a-grow" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(0,229,255,0.05);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;" disabled>+ Grow</button>
+          <button onclick="reqAction('A','finish')" id="btn-a-finish" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);border-radius:3px;cursor:pointer;" disabled>✓ Finish</button>
+        </div>
+      </div>
+
+      <!-- Request B -->
+      <div style="background:var(--surface2);border:1px solid rgba(180,255,111,0.2);border-radius:4px;padding:0.85rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--accent3);font-weight:700;">REQUEST B</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--muted);" id="req-b-info">not started</div>
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <button onclick="reqAction('B','start')" id="btn-b-start" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(180,255,111,0.1);border:1px solid rgba(180,255,111,0.3);color:var(--accent3);border-radius:3px;cursor:pointer;">▶ Start (5 blocks)</button>
+          <button onclick="reqAction('B','grow')" id="btn-b-grow" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(180,255,111,0.05);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;" disabled>+ Grow</button>
+          <button onclick="reqAction('B','finish')" id="btn-b-finish" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);border-radius:3px;cursor:pointer;" disabled>✓ Finish</button>
+        </div>
+      </div>
+
+      <!-- Request C -->
+      <div style="background:var(--surface2);border:1px solid rgba(255,179,71,0.2);border-radius:4px;padding:0.85rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--accent4);font-weight:700;">REQUEST C</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--muted);" id="req-c-info">not started</div>
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <button onclick="reqAction('C','start')" id="btn-c-start" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,179,71,0.1);border:1px solid rgba(255,179,71,0.3);color:var(--accent4);border-radius:3px;cursor:pointer;">▶ Start (4 blocks)</button>
+          <button onclick="reqAction('C','grow')" id="btn-c-grow" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,179,71,0.05);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;" disabled>+ Grow</button>
+          <button onclick="reqAction('C','finish')" id="btn-c-finish" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);border-radius:3px;cursor:pointer;" disabled>✓ Finish</button>
+        </div>
+      </div>
+
+      <!-- Request D -->
+      <div style="background:var(--surface2);border:1px solid rgba(199,146,234,0.2);border-radius:4px;padding:0.85rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;">
+          <div style="font-family:'Space Mono',monospace;font-size:0.65rem;color:#c792ea;font-weight:700;">REQUEST D</div>
+          <div style="font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--muted);" id="req-d-info">not started</div>
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <button onclick="reqAction('D','start')" id="btn-d-start" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(199,146,234,0.1);border:1px solid rgba(199,146,234,0.3);color:#c792ea;border-radius:3px;cursor:pointer;">▶ Start (8 blocks)</button>
+          <button onclick="reqAction('D','grow')" id="btn-d-grow" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(199,146,234,0.05);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;" disabled>+ Grow</button>
+          <button onclick="reqAction('D','finish')" id="btn-d-finish" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.3rem 0.6rem;background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);border-radius:3px;cursor:pointer;" disabled>✓ Finish</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Global controls -->
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+      <button onclick="reqAction('ALL','finishAll')" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.35rem 0.75rem;background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);color:var(--accent2);border-radius:3px;cursor:pointer;">✓ Finish All Active</button>
+      <button onclick="reqAction('ALL','reset')" style="font-family:'Space Mono',monospace;font-size:0.6rem;padding:0.35rem 0.75rem;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;">↺ Full Reset</button>
+    </div>
+
+    <!-- Event log -->
+    <div style="background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0.85rem;max-height:130px;overflow-y:auto;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.58rem;letter-spacing:0.08em;color:var(--muted);margin-bottom:0.5rem;text-transform:uppercase;">Event log</div>
+      <div id="kv-log" style="font-family:'Space Mono',monospace;font-size:0.65rem;line-height:1.9;"></div>
+    </div>
+
   </div>
 </section>
 
@@ -732,81 +889,176 @@ document.querySelectorAll('.t-dim').forEach(el=>{
 });
 
 /* ── KV block pool simulator ── */
-const TOTAL = 32;
-let blockState = new Array(TOTAL).fill('free'); // free, A, B, C, freed-A
-let reqBlocks = {A:[], B:[], C:[]};
+const TOTAL_BLOCKS = 32;
+const REQ_CONFIG = {
+  A: { startBlocks:3, growBlocks:2, color:'rgba(0,229,255,0.18)',  border:'rgba(0,229,255,0.5)',  label:'var(--accent)',  textColor:'var(--accent)'  },
+  B: { startBlocks:5, growBlocks:2, color:'rgba(180,255,111,0.15)',border:'rgba(180,255,111,0.45)',label:'var(--accent3)', textColor:'var(--accent3)' },
+  C: { startBlocks:4, growBlocks:3, color:'rgba(255,179,71,0.15)', border:'rgba(255,179,71,0.45)', label:'var(--accent4)', textColor:'var(--accent4)' },
+  D: { startBlocks:8, growBlocks:3, color:'rgba(199,146,234,0.15)',border:'rgba(199,146,234,0.45)',label:'#c792ea',        textColor:'#c792ea'        },
+};
 
-function renderGrid(){
-  const grid = document.getElementById('kv-grid');
-  grid.innerHTML = '';
-  let used=0;
-  blockState.forEach((state,i)=>{
-    const cell = document.createElement('div');
-    cell.className = 'kv-cell';
-    cell.textContent = String(i).padStart(2,'0');
-    if(state==='free'){
-      cell.classList.add('kv-free');
-    } else if(state==='A'){
-      cell.style.background='rgba(0,229,255,0.15)';
-      cell.style.borderColor='rgba(0,229,255,0.5)';
-      cell.style.color='var(--accent)';
-      cell.title='Request A';
-      used++;
-    } else if(state==='B'){
-      cell.style.background='rgba(180,255,111,0.12)';
-      cell.style.borderColor='rgba(180,255,111,0.4)';
-      cell.style.color='var(--accent3)';
-      cell.title='Request B';
-      used++;
-    } else if(state==='C'){
-      cell.style.background='rgba(255,179,71,0.12)';
-      cell.style.borderColor='rgba(255,179,71,0.4)';
-      cell.style.color='var(--accent4)';
-      cell.title='Request C';
-      used++;
-    } else if(state==='freed'){
-      cell.classList.add('kv-evicted');
-      cell.title='Freed — available for next request';
-    }
-    grid.appendChild(cell);
-  });
-  const free = blockState.filter(s=>s==='free'||s==='freed').length;
-  document.getElementById('kv-status').textContent =
-    `${free} blocks free · ${used} allocated · ${TOTAL-free} in use`;
+let blockState   = new Array(TOTAL_BLOCKS).fill('free');
+let reqBlocks    = { A:[], B:[], C:[], D:[] };
+let reqActive    = { A:false, B:false, C:false, D:false };
+let reqFinished  = { A:false, B:false, C:false, D:false };
+let logLines     = [];
+
+function addLog(msg, color){
+  const ts = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  logLines.unshift(`<span style="color:${color||'var(--muted)'};">[${ts}] ${msg}</span>`);
+  if(logLines.length>20) logLines.pop();
+  document.getElementById('kv-log').innerHTML = logLines.join('<br>');
 }
 
-function getFreeBlocks(n){
+function getFreeIndices(n){
   const free=[];
-  blockState.forEach((s,i)=>{ if((s==='free'||s==='freed')&&free.length<n) free.push(i); });
+  blockState.forEach((s,i)=>{ if(s==='free'&&free.length<n) free.push(i); });
   return free;
 }
 
-window.kvSim = function(action){
-  if(action==='addA'){
-    if(reqBlocks.A.length) return;
-    const blocks = getFreeBlocks(5);
-    if(!blocks.length) return;
-    blocks.forEach(b=>{ blockState[b]='A'; reqBlocks.A.push(b); });
-  } else if(action==='addB'){
-    if(reqBlocks.B.length) return;
-    const blocks = getFreeBlocks(4);
-    if(!blocks.length) return;
-    blocks.forEach(b=>{ blockState[b]='B'; reqBlocks.B.push(b); });
-  } else if(action==='addC'){
-    if(reqBlocks.C.length) return;
-    const blocks = getFreeBlocks(7);
-    if(!blocks.length) return;
-    blocks.forEach(b=>{ blockState[b]='C'; reqBlocks.C.push(b); });
-  } else if(action==='freeA'){
-    reqBlocks.A.forEach(b=>{ blockState[b]='freed'; });
-    reqBlocks.A=[];
-  } else if(action==='reset'){
-    blockState = new Array(TOTAL).fill('free');
-    reqBlocks = {A:[],B:[],C:[]};
+function renderGrid2(){
+  const grid = document.getElementById('kv-grid2');
+  grid.innerHTML='';
+  blockState.forEach((state,i)=>{
+    const cell=document.createElement('div');
+    cell.className='kv-cell';
+    cell.textContent=String(i).padStart(2,'0');
+    if(state==='free'){
+      cell.classList.add('kv-free');
+      cell.title=`Block ${i}: FREE`;
+    } else if(state==='freed'){
+      cell.style.background='rgba(255,77,109,0.08)';
+      cell.style.borderColor='rgba(255,77,109,0.3)';
+      cell.style.color='var(--accent2)';
+      cell.title=`Block ${i}: Just freed — returning to pool`;
+      // fade back to free after 1.2s
+      setTimeout(()=>{
+        if(blockState[i]==='freed'){ blockState[i]='free'; renderGrid2(); updateStats(); }
+      },1200);
+    } else {
+      const cfg=REQ_CONFIG[state]||{};
+      cell.style.background=cfg.color||'rgba(255,255,255,0.05)';
+      cell.style.borderColor=cfg.border||'rgba(255,255,255,0.2)';
+      cell.style.color=cfg.textColor||'var(--text)';
+      cell.title=`Block ${i}: Request ${state} (${reqBlocks[state]?reqBlocks[state].indexOf(i)+1:'?'}/${reqBlocks[state]?reqBlocks[state].length:'?'} blocks)`;
+    }
+    grid.appendChild(cell);
+  });
+  updateStats();
+  updateButtons();
+}
+
+function updateStats(){
+  const used  = blockState.filter(s=>s!=='free'&&s!=='freed').length;
+  const freed = blockState.filter(s=>s==='freed').length;
+  const free  = blockState.filter(s=>s==='free').length;
+  const activeReqs = Object.keys(reqActive).filter(k=>reqActive[k]).length;
+  const pct = Math.round((used/(TOTAL_BLOCKS))*100);
+  document.getElementById('stat-free').textContent = free + (freed>0?` (+${freed})` : '');
+  document.getElementById('stat-used').textContent  = used;
+  document.getElementById('stat-reqs').textContent  = activeReqs;
+  document.getElementById('stat-pct').textContent   = pct+'%';
+  document.getElementById('stat-pct').style.color   = pct>85?'var(--accent2)':pct>60?'var(--accent4)':'var(--accent2)';
+  document.getElementById('usage-bar').style.width  = pct+'%';
+  document.getElementById('usage-bar').style.background =
+    pct>85 ? 'var(--accent2)' : pct>60 ? 'linear-gradient(90deg,var(--accent),var(--accent4))' : 'linear-gradient(90deg,var(--accent),var(--accent3))';
+
+  // per-request info labels
+  ['A','B','C','D'].forEach(r=>{
+    const el = document.getElementById('req-'+r.toLowerCase()+'-info');
+    if(!el) return;
+    if(reqFinished[r])      el.textContent='finished ✓';
+    else if(reqActive[r])   el.textContent=`${reqBlocks[r].length} blocks allocated`;
+    else                    el.textContent='not started';
+  });
+}
+
+function updateButtons(){
+  ['A','B','C','D'].forEach(r=>{
+    const rl=r.toLowerCase();
+    const startBtn  = document.getElementById('btn-'+rl+'-start');
+    const growBtn   = document.getElementById('btn-'+rl+'-grow');
+    const finishBtn = document.getElementById('btn-'+rl+'-finish');
+    if(!startBtn) return;
+    const isActive   = reqActive[r];
+    const isFinished = reqFinished[r];
+    const freeCount  = blockState.filter(s=>s==='free').length;
+    const growN      = REQ_CONFIG[r].growBlocks;
+    startBtn.disabled  = isActive || isFinished;
+    startBtn.style.opacity = (isActive||isFinished)?'0.3':'1';
+    startBtn.style.cursor  = (isActive||isFinished)?'default':'pointer';
+    growBtn.disabled   = !isActive || isFinished || freeCount < growN;
+    growBtn.style.opacity  = (!isActive||isFinished||freeCount<growN)?'0.3':'1';
+    growBtn.style.cursor   = (!isActive||isFinished||freeCount<growN)?'default':'pointer';
+    finishBtn.disabled = !isActive || isFinished;
+    finishBtn.style.opacity = (!isActive||isFinished)?'0.3':'1';
+    finishBtn.style.cursor  = (!isActive||isFinished)?'default':'pointer';
+  });
+}
+
+window.reqAction = function(req, action){
+  if(action==='reset'){
+    blockState   = new Array(TOTAL_BLOCKS).fill('free');
+    reqBlocks    = {A:[],B:[],C:[],D:[]};
+    reqActive    = {A:false,B:false,C:false,D:false};
+    reqFinished  = {A:false,B:false,C:false,D:false};
+    logLines=[];
+    document.getElementById('kv-log').innerHTML='';
+    addLog('System reset — all 32 blocks returned to free pool.','var(--muted)');
+    renderGrid2(); return;
   }
-  renderGrid();
+  if(action==='finishAll'){
+    let any=false;
+    ['A','B','C','D'].forEach(r=>{
+      if(reqActive[r]&&!reqFinished[r]){
+        reqBlocks[r].forEach(b=>{ blockState[b]='freed'; });
+        reqBlocks[r]=[];
+        reqActive[r]=false;
+        reqFinished[r]=true;
+        addLog(`Request ${r} finished — blocks returned to pool.`,'var(--accent2)');
+        any=true;
+      }
+    });
+    if(!any) addLog('No active requests to finish.','var(--muted)');
+    renderGrid2(); return;
+  }
+  const r = req;
+  const cfg = REQ_CONFIG[r];
+  if(action==='start'){
+    if(reqActive[r]||reqFinished[r]) return;
+    const n = cfg.startBlocks;
+    const blocks = getFreeIndices(n);
+    if(blocks.length < n){
+      addLog(`Request ${r}: FAILED — only ${blocks.length} free blocks, need ${n}. Finish another request first.`,'var(--accent2)');
+      return;
+    }
+    blocks.forEach(b=>{ blockState[b]=r; reqBlocks[r].push(b); });
+    reqActive[r]=true;
+    addLog(`Request ${r} started — allocated blocks [${blocks.join(', ')}] (${n} blocks, ${n*256} tokens capacity).`,cfg.textColor);
+  } else if(action==='grow'){
+    if(!reqActive[r]||reqFinished[r]) return;
+    const n = cfg.growBlocks;
+    const blocks = getFreeIndices(n);
+    if(blocks.length < n){
+      addLog(`Request ${r}: cannot grow — only ${blocks.length} free, need ${n}.`,'var(--accent2)');
+      return;
+    }
+    blocks.forEach(b=>{ blockState[b]=r; reqBlocks[r].push(b); });
+    addLog(`Request ${r} grew — added blocks [${blocks.join(', ')}], now ${reqBlocks[r].length} total blocks.`,cfg.textColor);
+  } else if(action==='finish'){
+    if(!reqActive[r]||reqFinished[r]) return;
+    const freed = [...reqBlocks[r]];
+    freed.forEach(b=>{ blockState[b]='freed'; });
+    reqBlocks[r]=[];
+    reqActive[r]=false;
+    reqFinished[r]=true;
+    addLog(`Request ${r} finished — freed blocks [${freed.join(', ')}], returned to pool immediately.`,'var(--accent2)');
+  }
+  renderGrid2();
 };
-renderGrid();
+
+addLog('Simulator ready — 32 blocks free. Start a request to begin.','var(--muted)');
+renderGrid2();
 
 /* ── quiz ── */
 const CORRECT={1:'b',2:'c',3:'c'};
