@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nano-vLLM · Ch03 · KV Cache</title>
+<meta name="description" content="A beginner-friendly deep dive into the KV Cache — why Keys and Values are cached, the physical GPU tensor layout, Triton write kernels, and why this is the foundation of fast LLM inference.">
+<meta property="og:title" content="nano-vLLM Ch03 — KV Cache">
+<meta property="og:description" content="Why storing K and V vectors turns O(n²) recomputation into O(1) lookup — and how nano-vLLM implements it in a single pre-allocated GPU tensor.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ── */
+:root {
+  --bg:       #08090d;
+  --surface:  #0f1117;
+  --surface2: #161a24;
+  --border:   #1e2535;
+  --accent:   #00e5ff;
+  --accent2:  #ff4d6d;
+  --accent3:  #b4ff6f;
+  --accent4:  #ffb347;
+  --text:     #e2e8f4;
+  --muted:    #6b7a99;
+  --code-bg:  #0a0e1a;
+  --ch-accent: var(--accent); /* Ch03 dominant: cyan */
+}
+
+/* ── RESET ── */
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden;}
+
+/* ── SCAN LINES ── */
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9999;}
+
+/* ── NAV ── */
+.top-nav{position:sticky;top:0;z-index:100;background:rgba(8,9,13,0.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 1.5rem;display:flex;overflow-x:auto;scrollbar-width:none;}
+.top-nav::-webkit-scrollbar{display:none;}
+.top-nav a{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:0.85rem 0.9rem;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.2s;}
+.top-nav a:hover{color:var(--accent);}
+.top-nav a.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+/* ── HERO ── */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:4rem 2rem;position:relative;overflow:hidden;}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(0,229,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,0.04) 1px,transparent 1px);background-size:60px 60px;animation:gridDrift 20s linear infinite;}
+@keyframes gridDrift{from{transform:translate(0,0);}to{transform:translate(60px,60px);}}
+.hero-glow{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(0,229,255,0.08) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 6s ease-in-out infinite;}
+@keyframes glowPulse{0%,100%{opacity:0.5;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.12);}}
+.series-badge{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;color:var(--accent);border:1px solid rgba(0,229,255,0.3);padding:0.3rem 1rem;border-radius:2px;background:rgba(0,229,255,0.05);text-transform:uppercase;position:relative;z-index:1;animation:fadeUp 0.6s ease both;}
+.chapter-num{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(5rem,15vw,10rem);line-height:1;color:var(--accent);opacity:0.12;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.05s both;letter-spacing:-0.05em;}
+.hero h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(2rem,5vw,3.5rem);line-height:1.1;letter-spacing:-0.02em;margin-top:-0.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.1s both;}
+.hero-sub{font-size:1rem;font-weight:300;color:var(--muted);max-width:560px;margin:1rem auto 2.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.15s both;}
+.hero-nav{display:flex;gap:1rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.2s both;flex-wrap:wrap;justify-content:center;}
+.hero-nav a{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;transition:all 0.2s;}
+.btn-primary{background:var(--accent);color:#000;font-weight:700;}
+.btn-primary:hover{background:#00c8e0;}
+.btn-ghost{border:1px solid var(--border);color:var(--muted);}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── MAIN ── */
+main{max-width:900px;margin:0 auto;padding:4rem 2rem 6rem;}
+
+/* ── SECTIONS ── */
+.section{margin-bottom:5rem;}
+.section-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--ch-accent);text-transform:uppercase;margin-bottom:0.6rem;}
+.section h2{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(1.6rem,3.5vw,2.4rem);line-height:1.1;margin-bottom:1.25rem;letter-spacing:-0.02em;}
+.section h3{font-family:'Syne',sans-serif;font-weight:700;font-size:1.15rem;margin:2.5rem 0 0.75rem;}
+.lead{font-size:0.95rem;color:var(--muted);max-width:720px;margin-bottom:1.75rem;line-height:1.85;}
+
+/* ── DIVIDER ── */
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:3.5rem 0;}
+
+/* ── CALLOUT — fixed first-child selector ── */
+.callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.88rem;line-height:1.8;}
+.callout>strong:first-child{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+.callout.info{border-color:var(--accent);background:rgba(0,229,255,0.05);}
+.callout.info>strong:first-child{color:var(--accent);}
+.callout.warn{border-color:var(--accent4);background:rgba(255,179,71,0.05);}
+.callout.warn>strong:first-child{color:var(--accent4);}
+.callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.05);}
+.callout.insight>strong:first-child{color:var(--accent3);}
+
+/* ── CODE ── */
+.code-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent);background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.2);padding:0.2rem 0.6rem;border-radius:2px;display:inline-block;margin-bottom:0.5rem;}
+pre{background:var(--code-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:4px;padding:1.5rem;overflow-x:auto;font-family:'Space Mono',monospace;font-size:0.76rem;line-height:1.85;color:#c9d6ef;margin:0.5rem 0 1.5rem;}
+pre .comment{color:#3d4f6b;font-style:italic;}
+pre .keyword{color:var(--accent2);}
+pre .string{color:var(--accent3);}
+pre .num{color:var(--accent4);}
+pre .fn{color:var(--accent);}
+pre .cls{color:#c792ea;}
+code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,255,0.07);border:1px solid rgba(0,229,255,0.15);padding:0.1em 0.4em;border-radius:3px;color:var(--accent);}
+
+/* ── CARDS ── */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1.25rem;margin:1.5rem 0;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;transition:border-color 0.25s,transform 0.25s;}
+.card:hover{border-color:var(--card-accent,var(--accent));transform:translateY(-3px);}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--card-accent,var(--accent));}
+.card h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.5rem;}
+.card p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── DIAGRAM ── */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2rem;margin:1.5rem 0;position:relative;}
+.diagram-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);position:absolute;top:1rem;right:1.25rem;}
+
+/* ── TOKENS ── */
+.token-bar{display:flex;gap:5px;flex-wrap:wrap;margin:0.75rem 0;}
+.token{font-family:'Space Mono',monospace;font-size:0.7rem;padding:0.3rem 0.65rem;border-radius:3px;border:1px solid;transition:all 0.2s;}
+.token.prompt{background:rgba(0,229,255,0.08);border-color:rgba(0,229,255,0.3);color:var(--accent);}
+.token.gen{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.token.cached{background:rgba(180,255,111,0.08);border-color:rgba(180,255,111,0.3);color:var(--accent3);}
+
+/* ── STEP ROW ── */
+.step-row{display:flex;gap:1rem;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.step-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.68rem;font-weight:700;flex-shrink:0;}
+.step-row h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.9rem;margin-bottom:0.3rem;}
+.step-row p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* ── TENSOR SHAPE VIZ ── */
+.tensor-dims{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin:1rem 0;}
+.t-dim{background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:0.4rem 0.75rem;font-family:'Space Mono',monospace;font-size:0.72rem;cursor:pointer;transition:all 0.2s;position:relative;}
+.t-dim:hover,.t-dim.active{border-color:var(--accent);background:rgba(0,229,255,0.08);color:var(--accent);}
+.t-sep{font-family:'Space Mono',monospace;font-size:0.8rem;color:var(--muted);}
+.t-detail{background:var(--surface2);border:1px solid rgba(0,229,255,0.2);border-radius:4px;padding:1rem 1.25rem;margin-top:0.75rem;font-size:0.83rem;color:var(--muted);line-height:1.7;min-height:60px;}
+.t-detail strong{color:var(--text);}
+
+/* ── KV BLOCK GRID ── */
+.kv-grid{display:grid;gap:5px;margin:1.25rem 0;}
+.kv-cell{border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.6rem;font-weight:700;border:1px solid;transition:all 0.25s;cursor:default;aspect-ratio:1;}
+.kv-cell:hover{transform:scale(1.12);}
+.kv-free{background:rgba(255,255,255,0.02);border-color:rgba(255,255,255,0.07);color:var(--muted);}
+.kv-used{background:rgba(0,229,255,0.12);border-color:rgba(0,229,255,0.4);color:var(--accent);}
+.kv-cached{background:rgba(180,255,111,0.1);border-color:rgba(180,255,111,0.35);color:var(--accent3);}
+.kv-evicted{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+
+/* ── COST COMPARE ── */
+.cost-row{display:flex;align-items:center;gap:1rem;margin-bottom:0.75rem;}
+.cost-label{font-family:'Space Mono',monospace;font-size:0.68rem;min-width:160px;color:var(--muted);}
+.cost-track{flex:1;background:var(--surface2);border-radius:3px;height:20px;overflow:hidden;border:1px solid var(--border);}
+.cost-fill{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:8px;font-family:'Space Mono',monospace;font-size:0.6rem;font-weight:700;color:#000;transition:width 0.8s cubic-bezier(0.4,0,0.2,1);}
+
+/* ── QUIZ ── */
+.quiz-block{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;margin-bottom:1.25rem;}
+.quiz-block .q{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.9rem;}
+.quiz-opts{display:flex;flex-direction:column;gap:0.5rem;}
+.quiz-opts button{text-align:left;padding:0.6rem 1rem;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:0.85rem;line-height:1.5;transition:all 0.15s;}
+.quiz-opts button:hover:not(:disabled){border-color:var(--muted);color:var(--text);}
+.quiz-opts button.correct{background:rgba(180,255,111,0.1);border-color:rgba(180,255,111,0.4);color:var(--accent3);}
+.quiz-opts button.wrong{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.quiz-fb{display:none;margin-top:0.75rem;padding:0.75rem 1rem;border-radius:3px;font-size:0.82rem;line-height:1.7;}
+.quiz-fb.show{display:block;}
+.quiz-fb.ok{background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.2);color:var(--accent3);}
+.quiz-fb.no{background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);}
+
+/* ── TAKEAWAYS ── */
+.takeaways{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1.75rem;}
+.takeaways-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);margin-bottom:1.25rem;}
+.takeaway-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.85rem;}
+.takeaway-item{display:flex;gap:0.75rem;align-items:flex-start;}
+.takeaway-check{width:18px;height:18px;border-radius:2px;background:rgba(0,229,255,0.15);border:1px solid rgba(0,229,255,0.4);display:grid;place-items:center;flex-shrink:0;margin-top:3px;font-size:0.6rem;color:var(--accent);font-weight:700;}
+.takeaway-item p{font-size:0.82rem;color:var(--muted);line-height:1.65;}
+.takeaway-item strong{color:var(--text);}
+
+/* ── XREF ── */
+.xref{font-family:'Space Mono',monospace;font-size:0.65rem;color:rgba(0,229,255,0.6);border:1px solid rgba(0,229,255,0.2);padding:0 0.3rem;border-radius:2px;margin-left:0.25rem;}
+
+/* ── MISCONCEPTIONS ── */
+.misconception{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:0 4px 4px 0;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.misconception .myth{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;color:var(--accent2);text-transform:uppercase;margin-bottom:0.3rem;}
+.misconception .reality{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+.misconception .reality strong{color:var(--text);}
+
+/* ── FOOTER ── */
+.chapter-footer{border-top:1px solid var(--border);margin-top:5rem;padding:2.5rem 2rem;text-align:center;}
+.footer-nav{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin-bottom:1.25rem;}
+.footer-credit{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);}
+.footer-credit a{color:var(--accent);text-decoration:none;}
+
+@media(max-width:640px){
+  .takeaway-grid{grid-template-columns:1fr;}
+  .hero-nav{flex-direction:column;align-items:center;}
+  .cost-label{min-width:100px;font-size:0.6rem;}
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav class="top-nav">
+  <a href="index.html">Index</a>
+  <a href="ch01.html">01 · Inference</a>
+  <a href="ch02.html">02 · Architecture</a>
+  <a href="ch03.html" class="active">03 · KV Cache</a>
+  <a href="ch04.html">04 · PagedAttention</a>
+  <a href="ch05.html">05 · Scheduler</a>
+  <a href="ch06.html">06 · Prefill vs Decode</a>
+  <a href="ch07.html">07 · Prefix Caching</a>
+  <a href="ch08.html">08 · Sampling</a>
+  <a href="ch09.html">09 · Parallelism</a>
+  <a href="ch10.html">10 · Optimizations</a>
+  <a href="ch11.html">11 · Benchmarks</a>
+</nav>
+
+<!-- ── HERO ── -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="series-badge">Chapter 03 of 11 · nano-vLLM Deep Dive</div>
+  <div class="chapter-num">03</div>
+  <h1>The KV Cache</h1>
+  <p class="hero-sub">Why storing Keys and Values turns an O(n²) recomputation problem into O(1) lookup — and how nano-vLLM implements it as a single pre-allocated GPU tensor.</p>
+  <div class="hero-nav">
+    <a href="ch02.html" class="btn-ghost">← Ch02: Architecture</a>
+    <a href="ch04.html" class="btn-primary">Next: PagedAttention →</a>
+  </div>
+</header>
+
+<main>
+
+<!-- ══════════════════════════════
+     SECTION 1 — OPENING ANALOGY
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 1 — The Big Picture</div>
+  <h2>The most important optimisation in LLM inference</h2>
+  <p class="lead">Without the KV cache, generating a 200-token response would require recomputing attention from scratch 200 times — and each recomputation grows more expensive as the sequence gets longer. The KV cache eliminates that entirely. It is not optional, it is foundational.</p>
+
+  <div class="callout insight">
+    <strong>The Whiteboard Analogy</strong>
+    Imagine you're solving a long maths problem on a whiteboard. Each step requires looking back at every previous step to figure out what comes next. Without a whiteboard, you'd have to redo every prior step from memory each time. The whiteboard is your KV cache — a permanent record of what was computed, available for instant lookup. You write to it as you go, and read from it whenever you need context from earlier in the problem. Erasing it (which happens when a request finishes) is fast and free. The compute saved by not redoing the work is enormous.
+  </div>
+
+  <p class="lead">Every LLM inference engine — vLLM, TGI, TensorRT-LLM, and nano-vLLM — has a KV cache. Its design determines how many concurrent requests you can serve, how fast decode is, and how much GPU memory you need. The chapters on PagedAttention <span class="xref">→ Ch.04</span> and Prefix Caching <span class="xref">→ Ch.07</span> are both direct extensions of this one concept.</p>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 2 — THE PROBLEM
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 2 — The Problem It Solves</div>
+  <h2>What happens without a KV cache</h2>
+  <p class="lead">To understand why the KV cache exists, you first need to feel the pain of not having it. Let's trace through what naive inference would look like.</p>
+
+  <h3>Attention needs every previous token — always</h3>
+  <p class="lead">Recall from Chapter 01 <span class="xref">→ Ch.01</span> that each new token's attention mechanism computes a Query vector and compares it against the Key vectors of <em>every</em> previous token, then retrieves a weighted sum of their Value vectors. This is how the model understands context — token 50 can "attend to" token 3 directly, regardless of distance.</p>
+
+  <p class="lead">The critical question is: where do those Key and Value vectors come from? They are computed by running each token through the model's projection matrices. Without caching, you'd have to recompute them from scratch every single decode step.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Cost without KV cache</div>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1.25rem;">Generating token N requires computing K and V for all N-1 previous tokens. Cost grows quadratically with sequence length:</p>
+
+    <div class="cost-row">
+      <div class="cost-label">Token 1 (1 compute)</div>
+      <div class="cost-track"><div class="cost-fill" style="width:2%;background:var(--accent3);">1×</div></div>
+    </div>
+    <div class="cost-row">
+      <div class="cost-label">Token 10 (10 compute)</div>
+      <div class="cost-track"><div class="cost-fill" style="width:10%;background:var(--accent);">10×</div></div>
+    </div>
+    <div class="cost-row">
+      <div class="cost-label">Token 50 (50 compute)</div>
+      <div class="cost-track"><div class="cost-fill" style="width:50%;background:var(--accent4);">50×</div></div>
+    </div>
+    <div class="cost-row">
+      <div class="cost-label">Token 100 (100 compute)</div>
+      <div class="cost-track"><div class="cost-fill" style="width:100%;background:var(--accent2);">100× — every step gets more expensive</div></div>
+    </div>
+
+    <p style="font-size:0.78rem;color:var(--muted);margin-top:1rem;line-height:1.6;">Total compute to generate N tokens without caching: <strong style="color:var(--text)">O(N²)</strong>. For a 1,000-token response, that's 500,000 redundant K/V recomputations. The whiteboard analogy: you erase and redo every previous step before writing the next one.</p>
+  </div>
+
+  <h3>With a KV cache — O(N) total, O(1) per step</h3>
+  <p class="lead">The fix is simple: during prefill <span class="xref">→ Ch.06</span>, compute K and V for all input tokens once and save them. During each decode step, compute K and V only for the <em>one new token</em>, write it to the cache, then read all previous K and V directly. Each decode step costs constant time regardless of sequence length.</p>
+
+  <div class="callout info">
+    <strong>The fundamental trade-off</strong>
+    The KV cache trades <strong>memory</strong> for <strong>compute</strong>. You spend GPU RAM to store K and V vectors permanently, in exchange for never recomputing them. For typical LLM workloads — where responses are tens to hundreds of tokens — this is an overwhelmingly good trade. Compute saved >> memory spent. The challenge (which PagedAttention solves) is managing that memory efficiently across many concurrent requests.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 3 — WHAT IS STORED
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 3 — What Gets Cached</div>
+  <h2>Exactly what lives in the KV cache</h2>
+  <p class="lead">The KV cache stores one entry per token, per layer, per attention head. Understanding each of those dimensions is key to understanding why the cache can get so large — and why GQA (Grouped Query Attention) was invented to shrink it.</p>
+
+  <h3>Per token</h3>
+  <p class="lead">Every token that has been processed — whether from the prompt during prefill or generated during decode — writes its K and V vectors to the cache. A 500-token prompt + 100 generated tokens = 600 entries in the cache by the time generation ends.</p>
+
+  <h3>Per layer</h3>
+  <p class="lead">The transformer has multiple layers — Qwen3-1.7B has 28, LLaMA-3 70B has 80. Each layer runs its own attention computation with its own K and V projections. So every token produces 28 separate K vectors and 28 separate V vectors (one per layer). The cache must store all of them, because each layer reads from its own slice during attention.</p>
+
+  <div class="callout insight">
+    <strong>Why each layer needs its own K and V</strong>
+    Different layers in a transformer learn to attend to different kinds of patterns. Early layers might focus on syntax and nearby tokens. Later layers might focus on long-range semantic relationships. Each layer's K and V vectors encode that layer's specific "view" of a token — they're not interchangeable. Layer 3's K for the word "bank" is different from Layer 15's K for the same word.
+  </div>
+
+  <h3>Per attention head — and GQA</h3>
+  <p class="lead">Within each layer, standard Multi-Head Attention (MHA) has multiple attention heads — each learning a different relationship pattern. Each head has its own K and V vectors. With 32 heads per layer, that's 32× the cache size per token per layer.</p>
+
+  <p class="lead"><strong style="color:var(--text)">Grouped Query Attention (GQA)</strong>, used in Qwen3 and LLaMA-3, reduces this. Instead of one K/V head per Q head, multiple Q heads share a single K/V head. Qwen3-1.7B uses 16 query heads but only 8 KV heads — halving the KV cache size with minimal quality loss. That's why you'll see <code>num_kv_heads=8</code> in nano-vLLM's config, separate from <code>num_heads=16</code>.</p>
+
+  <div class="card-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>Multi-Head Attention (MHA)</h4>
+      <p>Every query head has its own K and V head. Full expressiveness, but KV cache size = num_heads × layers × tokens × head_dim × 2. For a 70B model: enormous.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Grouped Query Attention (GQA)</h4>
+      <p>Multiple Q heads share one K/V head. KV cache size = num_kv_heads × layers × tokens × head_dim × 2. Qwen3-1.7B uses 8 KV heads vs 16 Q heads — cache is half the size of MHA.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 4 — PHYSICAL LAYOUT
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 4 — Physical Layout in GPU Memory</div>
+  <h2>How nano-vLLM stores the KV cache</h2>
+  <p class="lead">nano-vLLM pre-allocates a single large tensor in GPU HBM <span class="xref">→ Ch.01</span> at startup and uses it for every request, for the entire lifetime of the engine. This is a deliberate design choice — allocation is expensive, so do it once.</p>
+
+  <h3>The tensor shape — six dimensions</h3>
+  <p class="lead">Click each dimension below to understand what it represents and why it exists:</p>
+
+  <div class="diagram">
+    <div class="diagram-label">cache.py — kv_cache tensor</div>
+    <div style="font-family:'Space Mono',monospace;font-size:0.75rem;color:var(--muted);margin-bottom:1rem;">kv_cache = torch.zeros(</div>
+    <div class="tensor-dims" id="tensor-dims">
+      <div class="t-dim" data-dim="0"><span style="color:var(--accent2);">2</span></div>
+      <div class="t-sep">,</div>
+      <div class="t-dim" data-dim="1"><span style="color:var(--accent4);">num_layers</span></div>
+      <div class="t-sep">,</div>
+      <div class="t-dim" data-dim="2"><span style="color:var(--accent3);">num_blocks</span></div>
+      <div class="t-sep">,</div>
+      <div class="t-dim" data-dim="3"><span style="color:var(--accent);">block_size</span></div>
+      <div class="t-sep">,</div>
+      <div class="t-dim" data-dim="4"><span style="color:var(--accent2);">num_kv_heads</span></div>
+      <div class="t-sep">,</div>
+      <div class="t-dim" data-dim="5"><span style="color:var(--accent3);">head_dim</span></div>
+      <div class="t-sep">)</div>
+    </div>
+    <div class="t-detail" id="t-detail">← Click any dimension to understand what it represents</div>
+  </div>
+
+  <h3>Concrete numbers — Qwen3-1.7B on a 16 GB GPU</h3>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin:1.25rem 0;">
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent);">28</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">layers</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent4);">256</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">tokens per block</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent3);">8</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">KV heads (GQA)</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent2);">64</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">head dimension</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent);">fp16</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">2 bytes per value</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid rgba(0,229,255,0.3);border-radius:4px;padding:1rem;text-align:center;">
+      <div style="font-family:'Space Mono',monospace;font-size:1.3rem;font-weight:700;color:var(--accent);" id="kv-size-result">~0.45 MB</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.2rem;">per block (K+V)</div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Why pre-allocate everything upfront?</strong>
+    PyTorch memory allocation (calling <code>torch.zeros()</code> or <code>torch.empty()</code>) is not free — it requires CUDA memory management and can cause fragmentation over time. By allocating one giant tensor at startup and slicing into it using index arithmetic, nano-vLLM eliminates all runtime allocation overhead. Every request gets pre-existing memory slots, not freshly allocated ones. This also makes the memory footprint perfectly predictable: you always know exactly how much GPU memory the KV cache will use.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 5 — WRITE MECHANISM (TRITON)
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 5 — Writing to the Cache</div>
+  <h2>How K and V get written — the Triton kernel</h2>
+  <p class="lead">Writing K and V vectors to the right locations in the cache needs to be fast — it happens on every token, in every layer, on every step. nano-vLLM uses a custom <strong style="color:var(--text)">Triton kernel</strong> for this. Let's understand what that means.</p>
+
+  <h3>What is a Triton kernel?</h3>
+  <p class="lead"><strong style="color:var(--text)">Triton</strong> is a Python-based language (from OpenAI) for writing GPU kernels. A <strong style="color:var(--text)">kernel</strong> is a function that runs directly on the GPU — not through PyTorch's standard operators, but as raw parallel GPU code. Writing a custom kernel lets you do exactly what you need, nothing more, with maximum control over memory access patterns.</p>
+
+  <div class="callout insight">
+    <strong>The Post Office Sorting Analogy</strong>
+    Imagine a post office where 10,000 letters arrive simultaneously (one per token). Each letter has an address (its slot in the KV cache). A naive Python loop would process them one at a time. A Triton kernel is like having 10,000 sorters working in parallel — each one grabs exactly one letter, reads its destination, and drops it in the right slot simultaneously. No coordination needed, no waiting.
+  </div>
+
+  <h3>The slot mapping — how the kernel knows where to write</h3>
+  <p class="lead">Before the kernel runs, the CPU block manager <span class="xref">→ Ch.02</span> computes a <strong style="color:var(--text)">slot mapping</strong>: a list of integers, one per token being processed. Each integer is the physical slot index in the KV cache tensor where that token's K and V should be written.</p>
+
+  <p class="lead">For example, if three tokens are being processed and they belong to blocks 47, 47, and 12 with offsets 0, 1, and 0 respectively, the slot mapping would be <code>[47×256+0, 47×256+1, 12×256+0]</code> = <code>[12032, 12033, 3072]</code>. The kernel reads this list and writes each token's data to the specified slot — no Python-level indexing on the hot path.</p>
+
+  <div class="code-label">cache.py — store_kvcache_kernel (Triton)</div>
+  <pre><span class="keyword">import</span> triton
+<span class="keyword">import</span> triton.language <span class="keyword">as</span> tl
+
+<span class="keyword">@triton.jit</span>
+<span class="keyword">def</span> <span class="fn">store_kvcache_kernel</span>(
+    keys_ptr, values_ptr,   <span class="comment"># pointers to the new K, V tensors from this forward pass</span>
+    kv_cache_ptr,           <span class="comment"># pointer to the base of the pre-allocated KV cache tensor</span>
+    slot_mapping_ptr,       <span class="comment"># pointer to the slot mapping list computed by the CPU block manager</span>
+    head_size: tl.constexpr,
+    num_heads: tl.constexpr,
+):
+    <span class="comment"># Each GPU thread handles one token — massively parallel</span>
+    token_idx = tl.<span class="fn">program_id</span>(<span class="num">0</span>)
+
+    <span class="comment"># Look up which physical slot this token maps to</span>
+    slot = tl.<span class="fn">load</span>(slot_mapping_ptr + token_idx)
+
+    <span class="comment"># Compute byte offsets into the KV cache for this slot</span>
+    cache_offset = slot * num_heads * head_size
+
+    <span class="comment"># Write K and V for this token's slot — no Python overhead here</span>
+    <span class="keyword">for</span> i <span class="keyword">in</span> <span class="fn">range</span>(num_heads * head_size):
+        tl.<span class="fn">store</span>(kv_cache_ptr + cache_offset + i,
+                tl.<span class="fn">load</span>(keys_ptr + token_idx * num_heads * head_size + i))
+        tl.<span class="fn">store</span>(kv_cache_ptr + cache_offset + i + <span class="comment">/* V offset */</span>,
+                tl.<span class="fn">load</span>(values_ptr + token_idx * num_heads * head_size + i))</pre>
+
+  <p class="lead">The key insight: this kernel launches one GPU thread per token. All tokens are written <em>simultaneously</em> in parallel. The CPU's slot mapping list is just integers — cheap to compute — but it lets the GPU write to non-contiguous memory locations correctly without any Python logic running during the write itself.</p>
+
+  <div class="callout warn">
+    <strong>Why non-contiguous writes matter</strong>
+    Tokens from different requests don't sit in adjacent slots — they may be scattered across many different blocks anywhere in the cache tensor (this is the whole point of PagedAttention <span class="xref">→ Ch.04</span>). Without the slot mapping + Triton kernel approach, you'd need Python indexing to write each token — thousands of individual Python operations on the hot path. The Triton kernel collapses all of that into a single GPU kernel launch with zero Python overhead per token.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 6 — INTERACTIVE BLOCK VIZ
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 6 — Visualising the Cache</div>
+  <h2>The KV cache block pool — interactive</h2>
+  <p class="lead">The cache is divided into fixed-size blocks. Each block holds <code>block_size</code> tokens (256 by default in nano-vLLM). Requests are allocated blocks from a free pool. When a request finishes, its blocks are returned. Use the buttons below to simulate the lifecycle.</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Block pool simulator — 32 blocks, 256 tokens each</div>
+
+    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:1.25rem;">
+      <button onclick="kvSim('addA')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(0,229,255,0.1);border:1px solid rgba(0,229,255,0.3);color:var(--accent);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(0,229,255,0.2)'" onmouseout="this.style.background='rgba(0,229,255,0.1)'">+ Add Request A</button>
+      <button onclick="kvSim('addB')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(180,255,111,0.1);border:1px solid rgba(180,255,111,0.3);color:var(--accent3);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(180,255,111,0.2)'" onmouseout="this.style.background='rgba(180,255,111,0.1)'">+ Add Request B</button>
+      <button onclick="kvSim('addC')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(255,179,71,0.1);border:1px solid rgba(255,179,71,0.3);color:var(--accent4);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,179,71,0.2)'" onmouseout="this.style.background='rgba(255,179,71,0.1)'">+ Add Request C</button>
+      <button onclick="kvSim('freeA')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);color:var(--accent2);border-radius:3px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,77,109,0.2)'" onmouseout="this.style.background='rgba(255,77,109,0.1)'">✓ Finish Request A</button>
+      <button onclick="kvSim('reset')" style="font-family:'Space Mono',monospace;font-size:0.65rem;padding:0.45rem 0.9rem;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;">↺ Reset</button>
+    </div>
+
+    <div class="kv-grid" id="kv-grid" style="grid-template-columns:repeat(8,1fr);"></div>
+
+    <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:1rem;font-size:0.72rem;color:var(--muted);">
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(0,229,255,0.3);border:1px solid var(--accent);"></div>Request A</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(180,255,111,0.25);border:1px solid var(--accent3);"></div>Request B</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,179,71,0.2);border:1px solid var(--accent4);"></div>Request C</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,77,109,0.1);border:1px solid var(--accent2);"></div>Freed (returned to pool)</div>
+      <div style="display:flex;align-items:center;gap:0.4rem;"><div style="width:10px;height:10px;border-radius:2px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);"></div>Free</div>
+    </div>
+
+    <div style="margin-top:0.85rem;font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--muted);" id="kv-status">32 blocks free · 0 allocated</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 7 — NANO-VLLM CODE
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 7 — In nano-vLLM</div>
+  <h2>The full picture in code</h2>
+  <p class="lead">Here is how the KV cache is initialised, and how it flows between the CPU block manager and the GPU attention layer during a forward pass.</p>
+
+  <div class="code-label">cache.py — initialisation at engine startup</div>
+  <pre><span class="keyword">class</span> <span class="cls">KVCache</span>:
+    <span class="keyword">def</span> <span class="fn">__init__</span>(self, config: <span class="cls">ModelConfig</span>, num_blocks: <span class="cls">int</span>):
+        <span class="comment"># One big tensor — allocated ONCE at startup, never again</span>
+        <span class="comment"># Shape: [2, layers, blocks, block_size, kv_heads, head_dim]</span>
+        <span class="comment"># dim 0 = 0 for Keys, 1 for Values</span>
+        self.data = torch.<span class="fn">zeros</span>(
+            <span class="num">2</span>,
+            config.num_hidden_layers,   <span class="comment"># 28 for Qwen3-1.7B</span>
+            num_blocks,                 <span class="comment"># total blocks available (e.g. 512)</span>
+            config.block_size,          <span class="comment"># 256 tokens per block</span>
+            config.num_key_value_heads, <span class="comment"># 8 (GQA — not 16!)</span>
+            config.head_dim,            <span class="comment"># 64</span>
+            dtype=torch.float16,
+            device=<span class="string">"cuda"</span>,
+        )</pre>
+
+  <div class="code-label">layers/attention.py — reading during the forward pass</div>
+  <pre><span class="keyword">def</span> <span class="fn">forward</span>(self, q, k, v, kv_cache, slot_mapping, block_table, is_prefill):
+    <span class="comment"># Write new K and V into the cache at the correct slots</span>
+    <span class="comment"># slot_mapping comes from the CPU block manager</span>
+    <span class="fn">store_kvcache_kernel</span>[num_tokens,](k, v, kv_cache, slot_mapping, ...)
+
+    <span class="keyword">if</span> is_prefill:
+        <span class="comment"># Prefill: standard flash attention over the full input sequence</span>
+        <span class="comment"># All tokens available as contiguous tensors</span>
+        out = <span class="fn">flash_attn_varlen_func</span>(q, k, v, ...)
+    <span class="keyword">else</span>:
+        <span class="comment"># Decode: flash attention that reads K, V from the paged cache</span>
+        <span class="comment"># block_table maps logical blocks to physical slots in kv_cache</span>
+        out = <span class="fn">flash_attn_with_kvcache</span>(q, kv_cache[<span class="num">0</span>], kv_cache[<span class="num">1</span>],
+                                       block_table=block_table, ...)</pre>
+
+  <div class="callout info">
+    <strong>Two attention paths — same cache</strong>
+    Prefill and decode use different flash attention functions, but they both write to and read from the <em>same</em> <code>kv_cache.data</code> tensor. <code>flash_attn_varlen_func</code> processes variable-length batches of prompt tokens all at once. <code>flash_attn_with_kvcache</code> handles one new decode token per sequence but needs to read K and V from scattered, non-contiguous blocks — which is exactly what the block_table enables. Both paths are covered in depth in the optimisations chapter <span class="xref">→ Ch.10</span>.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 8 — WHY IT MATTERS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 8 — Why It Matters</div>
+  <h2>What the KV cache enables at scale</h2>
+
+  <div class="card-grid">
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Constant-time decode</h4>
+      <p>Without the cache, decode step N costs O(N). With it, every decode step costs the same — one Triton write + one flash attention read. Generating token 500 is just as fast as generating token 1.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Enables PagedAttention</h4>
+      <p>The block-based structure of nano-vLLM's KV cache is not incidental — it's the foundation PagedAttention is built on. Blocks are the unit of allocation, sharing, and eviction. <span class="xref">→ Ch.04</span></p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>Enables prefix caching</h4>
+      <p>Because the cache is block-structured and blocks are identified by their token content, blocks with the same tokens (system prompts, templates) can be shared across requests without recomputation. <span class="xref">→ Ch.07</span></p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>The memory bottleneck</h4>
+      <p>KV cache is why GPU memory is the primary constraint in LLM serving, not GPU compute. A single 70B model request with 128k context needs ~100 GB of KV cache alone. This is the bottleneck PagedAttention was designed to solve. <span class="xref">→ Ch.04</span></p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 9 — MISCONCEPTIONS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 9 — Common Mistakes</div>
+  <h2>Things beginners get wrong about the KV cache</h2>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 1 — "The KV cache caches the model's weights"</div>
+    <div class="reality"><strong>Reality:</strong> The model weights are a completely separate concern — they live in GPU memory always and are never "cached" in the inference sense. The KV cache stores the <em>intermediate activation vectors</em> — specifically the Key and Value projections computed during each token's attention layer. If you cleared the KV cache the weights would be unaffected; you'd just have to recompute K and V from scratch again.</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 2 — "A bigger KV cache always means better performance"</div>
+    <div class="reality"><strong>Reality:</strong> A larger KV cache means more blocks, which means you can serve more concurrent requests or handle longer contexts before running out of memory. But it doesn't speed up individual token generation — that's limited by memory bandwidth (HBM read speed <span class="xref">→ Ch.01</span>). More cache = more capacity, not more speed per token.</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 3 — "The KV cache grows unboundedly during a session"</div>
+    <div class="reality"><strong>Reality:</strong> The KV cache is bounded by the pre-allocated tensor size. When a request finishes, its blocks are immediately returned to the free pool and can be reused by the next request. The total GPU memory used by the KV cache is fixed at startup — it never grows beyond what was allocated. What grows is the <em>number of slots used within</em> that fixed tensor, up to the max.</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 10 — QUIZ
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 10 — Check Your Understanding</div>
+  <h2>Quiz</h2>
+  <p class="lead">Three questions to test your understanding of the KV cache. Wrong answers explain exactly why they're wrong.</p>
+
+  <div class="quiz-block">
+    <p class="q">1. Without a KV cache, generating a 100-token response requires how many K/V computations relative to generating a 10-token response?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(1,'a',false,'10× more would mean linear scaling. But without a cache, generating token N requires recomputing K and V for all N-1 prior tokens. Token 100 requires ~100 recomputations, token 10 requires ~10 — the ratio scales with length, making the total work quadratic, not linear.')">10× more — proportional to response length</button>
+      <button onclick="quiz(1,'b',true,'Correct. Without caching, generating each token N requires recomputing K and V for all N-1 prior tokens. Total work = 1+2+3+...+N = O(N²). A 100-token response requires roughly 5,050 K/V computations; a 10-token response requires 55. That\'s ~90× more work for 10× more tokens — quadratic scaling.')">~90× more — because the work scales quadratically (O(N²))</button>
+      <button onclick="quiz(1,'c',false,'The cost without caching is not constant — it grows with every additional token. Generating token 100 requires recomputing K and V for tokens 1–99. Generating token 10 only requires recomputing for tokens 1–9. They are very different amounts of work.')">Same — each token costs the same to generate regardless</button>
+    </div>
+    <div class="quiz-fb" id="fb1"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">2. Qwen3-1.7B uses 16 query heads but only 8 KV heads. What technique is this, and what does it achieve?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(2,'a',false,'FlashAttention is a kernel-level optimisation that reduces memory traffic during the attention softmax computation — it does not change the number of K/V heads or reduce cache size. It operates on whatever Q, K, V tensors are passed to it.')">FlashAttention — reduces memory during the softmax computation</button>
+      <button onclick="quiz(2,'b',false,'Multi-Head Attention (MHA) is the standard approach where every query head has its own K and V head — meaning the number of Q, K, and V heads are all equal. Qwen3 deliberately uses fewer KV heads than Q heads, which is the defining feature of a different technique.')">Multi-Head Attention (MHA) — each query head has its own K and V</button>
+      <button onclick="quiz(2,'c',true,'Correct. Grouped Query Attention (GQA) allows multiple query heads to share a single K/V head pair. With 16 Q heads and 8 KV heads, each KV head is shared by 2 Q heads. This halves the KV cache size compared to standard MHA with negligible quality loss — a major practical win for memory-constrained serving.')">Grouped Query Attention (GQA) — multiple Q heads share one K/V head, halving cache size</button>
+    </div>
+    <div class="quiz-fb" id="fb2"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">3. Why does nano-vLLM use a Triton kernel to write to the KV cache instead of standard PyTorch indexing?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(3,'a',false,'Triton kernels are not more accurate than PyTorch — both use fp16 arithmetic with the same precision. The reason for the Triton kernel is performance: eliminating Python-level overhead on the hot path, not improving numerical accuracy.')">Triton kernels produce more accurate floating point results than PyTorch</button>
+      <button onclick="quiz(3,'b',false,'PyTorch can write to non-contiguous memory locations using advanced indexing — that is not the limitation. The issue is that doing so through Python requires Python interpreter overhead for each index operation, which is expensive when you have thousands of tokens per step.')">PyTorch cannot write to non-contiguous memory locations</button>
+      <button onclick="quiz(3,'c',true,'Correct. Writing K and V for potentially thousands of tokens per step through Python-level indexing would mean thousands of Python operations on the critical decode hot path. A Triton kernel launches one GPU thread per token, all running in parallel, with zero Python overhead per token. The slot mapping (a list of integers from the CPU block manager) tells each GPU thread exactly where to write — no Python logic runs during the actual write.')">To eliminate Python overhead — one GPU thread per token writes in parallel, zero Python logic on the hot path</button>
+    </div>
+    <div class="quiz-fb" id="fb3"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════════
+     SECTION 11 — TAKEAWAYS
+══════════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 11 — Key Takeaways</div>
+  <h2>What you now know</h2>
+
+  <div class="takeaways">
+    <div class="takeaways-label">Chapter 03 — Summary</div>
+    <div class="takeaway-grid">
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>KV cache trades memory for compute.</strong> Store K and V once during prefill, read them for free on every decode step. Eliminates O(N²) recomputation, makes every decode step O(1).</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Stored per token, per layer, per KV head.</strong> Every processed token writes one K and one V vector per layer. A 28-layer model with 500 tokens = 28,000 K vectors and 28,000 V vectors in the cache.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>GQA shrinks the cache.</strong> Grouped Query Attention uses fewer KV heads than Q heads. Qwen3-1.7B's 8 KV heads vs 16 Q heads halves the cache size compared to standard MHA.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Pre-allocated once at startup.</strong> nano-vLLM allocates one large tensor in GPU HBM at startup. No runtime allocation, no fragmentation, perfectly predictable memory footprint.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Written via Triton kernel.</strong> A custom GPU kernel writes K and V using a slot mapping from the CPU — one thread per token in parallel, zero Python overhead on the hot path.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Foundation for everything ahead.</strong> The block structure of the KV cache enables PagedAttention (Ch.04), prefix caching (Ch.07), and is the primary reason GPU memory is the binding constraint in LLM serving.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ── FOOTER ── -->
+<footer class="chapter-footer">
+  <div class="footer-nav">
+    <a href="ch02.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;border:1px solid var(--border);color:var(--muted);transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">← Ch02: Architecture</a>
+    <a href="index.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;border:1px solid var(--border);color:var(--muted);transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Series Index</a>
+    <a href="ch04.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;background:var(--accent);color:#000;font-weight:700;transition:all 0.2s;" onmouseover="this.style.background='#00c8e0'" onmouseout="this.style.background='var(--accent)'">Next: PagedAttention →</a>
+  </div>
+  <div class="footer-credit">
+    nano-vLLM by <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">GeeeekExplorer</a> · Study series · MIT License
+  </div>
+</footer>
+
+<!-- ── SCRIPTS ── -->
+<script>
+(function(){
+
+/* ── mark visited ── */
+localStorage.setItem('ch03','1');
+
+/* ── tensor dim explainer ── */
+const DIM_DATA = [
+  {
+    label: 'dim[0] = 2',
+    title: 'K or V selector',
+    body: 'The first dimension has exactly 2 slots: index 0 holds all Key vectors, index 1 holds all Value vectors. This means kv_cache[0] is the entire Key cache and kv_cache[1] is the entire Value cache. Keeping them in the same tensor avoids a second allocation and makes it easy to pass both to the attention kernel in one argument.'
+  },
+  {
+    label: 'dim[1] = num_layers',
+    title: 'Transformer layer index',
+    body: 'Each transformer layer runs its own independent attention — with its own learned Q, K, V projection weights. Each layer produces different K and V vectors for the same token. So we need num_layers "slabs" in the cache. For Qwen3-1.7B this is 28. For LLaMA-3 70B this is 80.'
+  },
+  {
+    label: 'dim[2] = num_blocks',
+    title: 'Physical block index (PagedAttention)',
+    body: 'The cache is divided into fixed-size blocks — this is the PagedAttention design (Ch.04). num_blocks is the total number of blocks in the pool. The CPU block manager assigns physical block IDs (0 to num_blocks-1) to sequences. A typical nano-vLLM setup on a 16 GB GPU might have 512–1024 blocks.'
+  },
+  {
+    label: 'dim[3] = block_size',
+    title: 'Tokens per block',
+    body: 'Each block holds block_size consecutive token slots. nano-vLLM defaults to 256 tokens per block. So block 47 holds the K and V vectors for up to 256 tokens. The slot within a block (0–255) is the token\'s offset within that block. slot = block_id × block_size + offset_within_block.'
+  },
+  {
+    label: 'dim[4] = num_kv_heads',
+    title: 'Number of KV attention heads (GQA)',
+    body: 'This is num_kv_heads, not num_heads. For Qwen3-1.7B with GQA: 8 KV heads, even though there are 16 query heads. Each of the 8 KV heads stores its K and V independently. The 16 query heads are split into 8 groups of 2, each group attending to one KV head.'
+  },
+  {
+    label: 'dim[5] = head_dim',
+    title: 'Per-head vector dimension',
+    body: 'Each K or V vector for a single token and single head is head_dim floats long. For Qwen3-1.7B, head_dim = 64. So each K or V entry is 64 float16 values = 128 bytes. The total size of one token\'s KV data across all layers: 2 (K+V) × 28 (layers) × 8 (kv_heads) × 64 (head_dim) × 2 bytes = 57,344 bytes ≈ 56 KB per token.'
+  }
+];
+
+document.querySelectorAll('.t-dim').forEach(el=>{
+  el.addEventListener('click',()=>{
+    document.querySelectorAll('.t-dim').forEach(d=>d.classList.remove('active'));
+    el.classList.add('active');
+    const d = DIM_DATA[parseInt(el.dataset.dim)];
+    document.getElementById('t-detail').innerHTML =
+      `<strong style="color:var(--text);display:block;margin-bottom:0.3rem;">${d.label} — ${d.title}</strong>${d.body}`;
+  });
+});
+
+/* ── KV block pool simulator ── */
+const TOTAL = 32;
+let blockState = new Array(TOTAL).fill('free'); // free, A, B, C, freed-A
+let reqBlocks = {A:[], B:[], C:[]};
+
+function renderGrid(){
+  const grid = document.getElementById('kv-grid');
+  grid.innerHTML = '';
+  let used=0;
+  blockState.forEach((state,i)=>{
+    const cell = document.createElement('div');
+    cell.className = 'kv-cell';
+    cell.textContent = String(i).padStart(2,'0');
+    if(state==='free'){
+      cell.classList.add('kv-free');
+    } else if(state==='A'){
+      cell.style.background='rgba(0,229,255,0.15)';
+      cell.style.borderColor='rgba(0,229,255,0.5)';
+      cell.style.color='var(--accent)';
+      cell.title='Request A';
+      used++;
+    } else if(state==='B'){
+      cell.style.background='rgba(180,255,111,0.12)';
+      cell.style.borderColor='rgba(180,255,111,0.4)';
+      cell.style.color='var(--accent3)';
+      cell.title='Request B';
+      used++;
+    } else if(state==='C'){
+      cell.style.background='rgba(255,179,71,0.12)';
+      cell.style.borderColor='rgba(255,179,71,0.4)';
+      cell.style.color='var(--accent4)';
+      cell.title='Request C';
+      used++;
+    } else if(state==='freed'){
+      cell.classList.add('kv-evicted');
+      cell.title='Freed — available for next request';
+    }
+    grid.appendChild(cell);
+  });
+  const free = blockState.filter(s=>s==='free'||s==='freed').length;
+  document.getElementById('kv-status').textContent =
+    `${free} blocks free · ${used} allocated · ${TOTAL-free} in use`;
+}
+
+function getFreeBlocks(n){
+  const free=[];
+  blockState.forEach((s,i)=>{ if((s==='free'||s==='freed')&&free.length<n) free.push(i); });
+  return free;
+}
+
+window.kvSim = function(action){
+  if(action==='addA'){
+    if(reqBlocks.A.length) return;
+    const blocks = getFreeBlocks(5);
+    if(!blocks.length) return;
+    blocks.forEach(b=>{ blockState[b]='A'; reqBlocks.A.push(b); });
+  } else if(action==='addB'){
+    if(reqBlocks.B.length) return;
+    const blocks = getFreeBlocks(4);
+    if(!blocks.length) return;
+    blocks.forEach(b=>{ blockState[b]='B'; reqBlocks.B.push(b); });
+  } else if(action==='addC'){
+    if(reqBlocks.C.length) return;
+    const blocks = getFreeBlocks(7);
+    if(!blocks.length) return;
+    blocks.forEach(b=>{ blockState[b]='C'; reqBlocks.C.push(b); });
+  } else if(action==='freeA'){
+    reqBlocks.A.forEach(b=>{ blockState[b]='freed'; });
+    reqBlocks.A=[];
+  } else if(action==='reset'){
+    blockState = new Array(TOTAL).fill('free');
+    reqBlocks = {A:[],B:[],C:[]};
+  }
+  renderGrid();
+};
+renderGrid();
+
+/* ── quiz ── */
+const CORRECT={1:'b',2:'c',3:'c'};
+window.quiz=function(n,opt,isCorrect,msg){
+  const fb=document.getElementById('fb'+n);
+  fb.textContent=msg;
+  fb.className='quiz-fb show '+(isCorrect?'ok':'no');
+  fb.closest('.quiz-block').querySelectorAll('button').forEach((b,i)=>{
+    b.disabled=true;
+    const letters=['a','b','c'];
+    if(letters[i]===opt&&!isCorrect) b.classList.add('wrong');
+    if(letters[i]===CORRECT[n]) b.classList.add('correct');
+  });
+};
+
+})();
+</script>
+</body>
+</html>
