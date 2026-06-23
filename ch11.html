@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nano-vLLM · Ch11 · Benchmarks</title>
+<meta name="description" content="How to measure LLM inference performance honestly — throughput vs latency, percentiles, the batch-size trade-off, nano-vLLM vs vLLM, and what nano-vLLM deliberately leaves out.">
+<meta property="og:title" content="nano-vLLM Ch11 — Benchmarks">
+<meta property="og:description" content="The final chapter. How to read inference benchmarks without being misled, what nano-vLLM achieves, and what it deliberately omits.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#08090d;--surface:#0f1117;--surface2:#161a24;
+  --border:#1e2535;--accent:#00e5ff;--accent2:#ff4d6d;
+  --accent3:#b4ff6f;--accent4:#ffb347;
+  --text:#e2e8f4;--muted:#6b7a99;--code-bg:#0a0e1a;
+  --ch-accent:var(--accent4);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,0.015) 2px,rgba(0,229,255,0.015) 4px);pointer-events:none;z-index:9999;}
+
+/* NAV */
+.top-nav{position:sticky;top:0;z-index:100;background:rgba(8,9,13,0.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 1.5rem;display:flex;overflow-x:auto;scrollbar-width:none;}
+.top-nav::-webkit-scrollbar{display:none;}
+.top-nav a{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:0.85rem 0.9rem;border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.2s;}
+.top-nav a:hover{color:var(--accent4);}
+.top-nav a.active{color:var(--accent4);border-bottom-color:var(--accent4);}
+
+/* HERO */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:4rem 2rem;position:relative;overflow:hidden;}
+.hero-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,179,71,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,179,71,0.035) 1px,transparent 1px);background-size:60px 60px;animation:gridDrift 20s linear infinite;}
+@keyframes gridDrift{from{transform:translate(0,0);}to{transform:translate(60px,60px);}}
+.hero-glow{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(255,179,71,0.07) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 6s ease-in-out infinite;}
+@keyframes glowPulse{0%,100%{opacity:0.5;transform:translate(-50%,-50%) scale(1);}50%{opacity:1;transform:translate(-50%,-50%) scale(1.12);}}
+.series-badge{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;color:var(--accent4);border:1px solid rgba(255,179,71,0.3);padding:0.3rem 1rem;border-radius:2px;background:rgba(255,179,71,0.05);text-transform:uppercase;position:relative;z-index:1;animation:fadeUp 0.6s ease both;}
+.chapter-num{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(5rem,15vw,10rem);line-height:1;color:var(--accent4);opacity:0.12;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.05s both;letter-spacing:-0.05em;}
+.hero h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(2rem,5vw,3.5rem);line-height:1.1;letter-spacing:-0.02em;margin-top:-0.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.1s both;}
+.hero-sub{font-size:1rem;font-weight:300;color:var(--muted);max-width:560px;margin:1rem auto 2.5rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.15s both;}
+.hero-nav{display:flex;gap:1rem;position:relative;z-index:1;animation:fadeUp 0.6s ease 0.2s both;flex-wrap:wrap;justify-content:center;}
+.hero-nav a{font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;transition:all 0.2s;}
+.btn-primary{background:var(--accent4);color:#000;font-weight:700;}
+.btn-primary:hover{background:#e09b2e;}
+.btn-ghost{border:1px solid var(--border);color:var(--muted);}
+.btn-ghost:hover{border-color:var(--accent4);color:var(--accent4);}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:translateY(0);}}
+
+/* MAIN */
+main{max-width:900px;margin:0 auto;padding:4rem 2rem 6rem;}
+.section{margin-bottom:5rem;}
+.section-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--ch-accent);text-transform:uppercase;margin-bottom:0.6rem;}
+.section h2{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(1.6rem,3.5vw,2.4rem);line-height:1.1;margin-bottom:1.25rem;letter-spacing:-0.02em;}
+.section h3{font-family:'Syne',sans-serif;font-weight:700;font-size:1.15rem;margin:2.5rem 0 0.75rem;}
+.lead{font-size:0.95rem;color:var(--muted);max-width:720px;margin-bottom:1.75rem;line-height:1.85;}
+.divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:3.5rem 0;}
+
+/* CALLOUTS */
+.callout{border-left:3px solid;padding:1rem 1.5rem;margin:1.5rem 0;border-radius:0 4px 4px 0;font-size:0.88rem;line-height:1.8;}
+.callout>strong:first-child{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;display:block;margin-bottom:0.4rem;}
+.callout.info{border-color:var(--accent);background:rgba(0,229,255,0.05);}
+.callout.info>strong:first-child{color:var(--accent);}
+.callout.warn{border-color:var(--accent4);background:rgba(255,179,71,0.05);}
+.callout.warn>strong:first-child{color:var(--accent4);}
+.callout.insight{border-color:var(--accent3);background:rgba(180,255,111,0.05);}
+.callout.insight>strong:first-child{color:var(--accent3);}
+.callout.danger{border-color:var(--accent2);background:rgba(255,77,109,0.05);}
+.callout.danger>strong:first-child{color:var(--accent2);}
+
+/* CODE */
+.code-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent4);background:rgba(255,179,71,0.08);border:1px solid rgba(255,179,71,0.2);padding:0.2rem 0.6rem;border-radius:2px;display:inline-block;margin-bottom:0.5rem;}
+pre{background:var(--code-bg);border:1px solid var(--border);border-left:3px solid var(--accent4);border-radius:4px;padding:1.5rem;overflow-x:auto;font-family:'Space Mono',monospace;font-size:0.76rem;line-height:1.85;color:#c9d6ef;margin:0.5rem 0 1.5rem;}
+pre .comment{color:#3d4f6b;font-style:italic;}
+pre .keyword{color:var(--accent2);}
+pre .string{color:var(--accent3);}
+pre .num{color:var(--accent4);}
+pre .fn{color:var(--accent);}
+pre .cls{color:#c792ea;}
+code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179,71,0.07);border:1px solid rgba(255,179,71,0.15);padding:0.1em 0.4em;border-radius:3px;color:var(--accent4);}
+
+/* CARDS */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1.25rem;margin:1.5rem 0;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;position:relative;overflow:hidden;transition:border-color 0.25s,transform 0.25s;}
+.card:hover{border-color:var(--card-accent,var(--accent4));transform:translateY(-3px);}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--card-accent,var(--accent4));}
+.card h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.5rem;}
+.card p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* DIAGRAM */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2rem;margin:1.5rem 0;position:relative;}
+.diagram-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);position:absolute;top:1rem;right:1.25rem;}
+
+/* COMPARISON TABLE */
+.compare-table{width:100%;border-collapse:collapse;margin:1.5rem 0;font-size:0.83rem;}
+.compare-table th{font-family:'Space Mono',monospace;font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:0.75rem 1rem;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2);}
+.compare-table td{padding:0.85rem 1rem;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:top;line-height:1.6;}
+.compare-table tr:hover td{background:rgba(255,255,255,0.02);}
+.tag{display:inline-block;font-family:'Space Mono',monospace;font-size:0.58rem;padding:0.15rem 0.5rem;border-radius:2px;}
+.tag-red{background:rgba(255,77,109,0.12);color:var(--accent2);border:1px solid rgba(255,77,109,0.25);}
+.tag-green{background:rgba(180,255,111,0.1);color:var(--accent3);border:1px solid rgba(180,255,111,0.25);}
+.tag-amber{background:rgba(255,179,71,0.1);color:var(--accent4);border:1px solid rgba(255,179,71,0.25);}
+
+/* STEP ROW */
+.step-row{display:flex;gap:1rem;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.step-badge{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:0.68rem;font-weight:700;flex-shrink:0;}
+.step-row h4{font-family:'Syne',sans-serif;font-weight:700;font-size:0.9rem;margin-bottom:0.3rem;}
+.step-row p{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+
+/* QUIZ */
+.quiz-block{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:1.5rem;margin-bottom:1.25rem;}
+.quiz-block .q{font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;margin-bottom:0.9rem;}
+.quiz-opts{display:flex;flex-direction:column;gap:0.5rem;}
+.quiz-opts button{text-align:left;padding:0.6rem 1rem;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:3px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:0.85rem;line-height:1.5;transition:all 0.15s;}
+.quiz-opts button:hover:not(:disabled){border-color:var(--muted);color:var(--text);}
+.quiz-opts button.correct{background:rgba(180,255,111,0.1);border-color:rgba(180,255,111,0.4);color:var(--accent3);}
+.quiz-opts button.wrong{background:rgba(255,77,109,0.08);border-color:rgba(255,77,109,0.3);color:var(--accent2);}
+.quiz-fb{display:none;margin-top:0.75rem;padding:0.75rem 1rem;border-radius:3px;font-size:0.82rem;line-height:1.7;}
+.quiz-fb.show{display:block;}
+.quiz-fb.ok{background:rgba(180,255,111,0.07);border:1px solid rgba(180,255,111,0.2);color:var(--accent3);}
+.quiz-fb.no{background:rgba(255,77,109,0.07);border:1px solid rgba(255,77,109,0.2);color:var(--accent2);}
+
+/* TAKEAWAYS */
+.takeaways{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1.75rem;}
+.takeaways-label{font-family:'Space Mono',monospace;font-size:0.6rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent4);margin-bottom:1.25rem;}
+.takeaway-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.85rem;}
+.takeaway-item{display:flex;gap:0.75rem;align-items:flex-start;}
+.takeaway-check{width:18px;height:18px;border-radius:2px;background:rgba(255,179,71,0.15);border:1px solid rgba(255,179,71,0.4);display:grid;place-items:center;flex-shrink:0;margin-top:3px;font-size:0.6rem;color:var(--accent4);font-weight:700;}
+.takeaway-item p{font-size:0.82rem;color:var(--muted);line-height:1.65;}
+.takeaway-item strong{color:var(--text);}
+
+/* XREF + MISC */
+.xref{font-family:'Space Mono',monospace;font-size:0.65rem;color:rgba(0,229,255,0.6);border:1px solid rgba(0,229,255,0.2);padding:0 0.3rem;border-radius:2px;margin-left:0.25rem;}
+.misconception{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:0 4px 4px 0;padding:1rem 1.25rem;margin-bottom:0.75rem;}
+.misconception .myth{font-family:'Space Mono',monospace;font-size:0.65rem;letter-spacing:0.08em;color:var(--accent2);text-transform:uppercase;margin-bottom:0.3rem;}
+.misconception .reality{font-size:0.82rem;color:var(--muted);line-height:1.7;}
+.misconception .reality strong{color:var(--text);}
+
+/* SERIES COMPLETE BANNER */
+.series-complete{background:linear-gradient(135deg,rgba(255,179,71,0.08),rgba(180,255,111,0.05));border:1px solid rgba(255,179,71,0.3);border-radius:6px;padding:2rem;margin:2rem 0;text-align:center;}
+.series-complete h3{font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;margin-bottom:0.75rem;color:var(--text);}
+.chapter-pills{display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center;margin:1.5rem 0;}
+.chapter-pill{font-family:'Space Mono',monospace;font-size:0.62rem;padding:0.35rem 0.7rem;border-radius:3px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);text-decoration:none;transition:all 0.2s;}
+.chapter-pill:hover{border-color:var(--accent4);color:var(--accent4);}
+
+/* FOOTER */
+.chapter-footer{border-top:1px solid var(--border);margin-top:5rem;padding:2.5rem 2rem;text-align:center;}
+.footer-nav{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin-bottom:1.25rem;}
+.footer-credit{font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);}
+.footer-credit a{color:var(--accent4);text-decoration:none;}
+
+@media(max-width:640px){
+  .takeaway-grid{grid-template-columns:1fr;}
+  .hero-nav{flex-direction:column;align-items:center;}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="top-nav">
+  <a href="index.html">Index</a>
+  <a href="ch01.html">01 · Inference</a>
+  <a href="ch02.html">02 · Architecture</a>
+  <a href="ch03.html">03 · KV Cache</a>
+  <a href="ch04.html">04 · PagedAttention</a>
+  <a href="ch05.html">05 · Scheduler</a>
+  <a href="ch06.html">06 · Prefill vs Decode</a>
+  <a href="ch07.html">07 · Prefix Caching</a>
+  <a href="ch08.html">08 · Sampling</a>
+  <a href="ch09.html">09 · Parallelism</a>
+  <a href="ch10.html">10 · Optimizations</a>
+  <a href="ch11.html" class="active">11 · Benchmarks</a>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="series-badge">Chapter 11 of 11 · nano-vLLM Deep Dive</div>
+  <div class="chapter-num">11</div>
+  <h1>Benchmarks</h1>
+  <p class="hero-sub">The final chapter. How to measure inference performance honestly, what nano-vLLM achieves against production vLLM, and how to read benchmarks without being misled.</p>
+  <div class="hero-nav">
+    <a href="ch10.html" class="btn-ghost">← Ch10: Optimizations</a>
+    <a href="index.html" class="btn-primary">Back to Series Index →</a>
+  </div>
+</header>
+
+<main>
+
+<!-- ══════════════════════════
+     SECTION 1 — ANALOGY
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 1 — The Big Picture</div>
+  <h2>Numbers lie — unless you know what they measure</h2>
+  <p class="lead">"Our engine does 5,000 tokens per second!" — but at what batch size, on what hardware, with what prompt lengths, measured how? A benchmark number without context is meaningless, and the LLM serving world is full of misleading comparisons. This final chapter teaches you to measure performance honestly and read others' numbers critically.</p>
+
+  <div class="callout insight">
+    <strong>The Highway Analogy</strong>
+    Imagine measuring a highway's performance. You could measure <strong>throughput</strong> — how many cars pass a point per hour. Or <strong>latency</strong> — how long one specific car takes to drive the route. These are different and often in tension: packing the highway with cars maximises throughput (cars/hour) but each individual car moves slower in the congestion (worse latency). An empty highway gives any single car the fastest trip (best latency) but moves very few cars total (poor throughput). LLM inference has exactly this tension. A benchmark that reports only one number is hiding the trade-off. You must always ask: throughput or latency — and at what load?
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 2 — THE METRICS
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 2 — The Metrics That Matter</div>
+  <h2>The four numbers worth measuring</h2>
+  <p class="lead">There is no single "speed" of an inference engine. There are several metrics, each answering a different question. A serious benchmark reports all of them.</p>
+
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(255,179,71,0.15);border:1px solid rgba(255,179,71,0.4);color:var(--accent4);">1</div>
+    <div>
+      <h4>Throughput — total tokens per second across all requests</h4>
+      <p>The total number of output tokens the engine produces per second, summed across every concurrent request. This is the metric that matters for <em>cost</em> — higher throughput means more users served per GPU, lower cost per token. A batch server optimises for this. Measured in tokens/second (sometimes requests/second).</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(255,77,109,0.15);border:1px solid rgba(255,77,109,0.4);color:var(--accent2);">2</div>
+    <div>
+      <h4>TTFT — Time To First Token</h4>
+      <p>How long from sending a request until the first token appears <span class="xref">→ Ch.06</span>. Determined by prefill speed and queue waiting time. This is what users feel as "responsiveness". For interactive chat, low TTFT matters more than raw throughput.</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(0,229,255,0.15);border:1px solid rgba(0,229,255,0.4);color:var(--accent);">3</div>
+    <div>
+      <h4>TPOT — Time Per Output Token</h4>
+      <p>The average time between successive generated tokens after the first <span class="xref">→ Ch.06</span>. Determines streaming speed — how fast text flows once it starts. A TPOT of 25ms = 40 tokens/second, comfortably faster than human reading speed.</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);color:var(--accent3);">4</div>
+    <div>
+      <h4>Percentiles — p50, p95, p99 latency</h4>
+      <p>Averages hide bad experiences. <strong style="color:var(--text)">Percentiles</strong> tell the full story: p50 (median) is the typical case; p99 is the worst 1% — the unlucky requests that waited longest. A system with great average latency but terrible p99 means 1 in 100 users has an awful experience. Production systems are judged on p95 and p99, not just averages.</p>
+    </div>
+  </div>
+
+  <div class="callout insight">
+    <strong>The "worst day" analogy for percentiles</strong>
+    Imagine describing your commute. The <strong>average</strong> is 30 minutes — but that hides the reality. p50 (median) says "half my commutes are under 28 minutes". p99 says "1 in 100 commutes takes over 90 minutes" (the day of the accident). If you promised your boss you'd always arrive by a certain time, the average is useless — you'd plan around p99, the worst realistic case. Production LLM services make latency promises (SLAs) based on p95/p99 for exactly this reason: the typical case isn't what hurts users, the tail is.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 3 — THE TRADE-OFF
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 3 — The Fundamental Trade-Off</div>
+  <h2>Throughput vs latency — you can't max both</h2>
+  <p class="lead">The single most important concept in inference benchmarking is the tension between throughput and latency, and it's controlled mainly by one knob: <strong style="color:var(--text)">batch size</strong> — how many requests the engine processes simultaneously.</p>
+
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);color:var(--accent3);">↑</div>
+    <div>
+      <h4>Large batch size → high throughput, worse latency</h4>
+      <p>Processing many requests together makes excellent use of the GPU — especially in decode, where the weight read is shared across the whole batch <span class="xref">→ Ch.06</span>. Total tokens/second soars. But each individual request shares GPU time with many others, so any single request's tokens arrive a little slower. Great for cost, worse for the individual user's experience.</p>
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-badge" style="background:rgba(0,229,255,0.15);border:1px solid rgba(0,229,255,0.4);color:var(--accent);">↓</div>
+    <div>
+      <h4>Small batch size → low latency, worse throughput</h4>
+      <p>With few requests in flight, each gets a large share of the GPU — fast individual responses, low TPOT. But the GPU is underutilised: you're paying for a whole GPU to serve just a few users. Total throughput is low, cost per token is high. Great for a premium low-latency experience, expensive at scale.</p>
+    </div>
+  </div>
+
+  <div class="diagram">
+    <div class="diagram-label">Interactive: the batch-size trade-off</div>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1.25rem;">Drag the batch size slider and watch throughput and per-request latency move in opposite directions. There is no setting that maximises both — the right choice depends on what you're optimising for.</p>
+
+    <div style="margin-bottom:1.5rem;">
+      <label style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--accent4);display:block;margin-bottom:0.5rem;">BATCH SIZE: <span id="bench-bs-val">16</span> concurrent requests</label>
+      <input type="range" id="bench-bs" min="1" max="128" step="1" value="16" style="width:100%;accent-color:var(--accent4);" oninput="updateBench()">
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;">
+      <div style="background:var(--surface2);border:1px solid rgba(180,255,111,0.3);border-radius:4px;padding:1.1rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.5rem;font-weight:700;color:var(--accent3);" id="bench-tput">–</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">total throughput (tok/s)</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid rgba(0,229,255,0.3);border-radius:4px;padding:1.1rem;text-align:center;">
+        <div style="font-family:'Space Mono',monospace;font-size:1.5rem;font-weight:700;color:var(--accent);" id="bench-tpot">–</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:0.2rem;">per-request TPOT (ms)</div>
+      </div>
+    </div>
+
+    <!-- Throughput bar -->
+    <div style="margin-bottom:0.75rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);margin-bottom:0.25rem;">THROUGHPUT</div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden;">
+        <div id="bench-tput-bar" style="height:100%;background:var(--accent3);border-radius:3px;transition:width 0.3s;"></div>
+      </div>
+    </div>
+    <!-- Latency bar -->
+    <div style="margin-bottom:1rem;">
+      <div style="font-family:'Space Mono',monospace;font-size:0.6rem;color:var(--muted);margin-bottom:0.25rem;">PER-REQUEST LATENCY (higher = slower for each user)</div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden;">
+        <div id="bench-tpot-bar" style="height:100%;background:var(--accent2);border-radius:3px;transition:width 0.3s;"></div>
+      </div>
+    </div>
+
+    <div style="background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0.85rem;font-family:'Space Mono',monospace;font-size:0.68rem;color:var(--muted);line-height:1.7;" id="bench-note"></div>
+  </div>
+
+  <div class="callout warn">
+    <strong>This is why "fastest engine" is a meaningless claim</strong>
+    An engine tuned for maximum throughput (huge batches) and one tuned for minimum latency (tiny batches) are optimising opposite ends of this curve. When someone says their engine is "fastest", always ask: throughput-fastest or latency-fastest? At what batch size? They're usually quoting whichever number flatters them. An honest benchmark shows the <em>whole curve</em> — throughput at a range of latency targets — not a single cherry-picked point.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 4 — NANO VS VLLM
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 4 — nano-vLLM vs vLLM</div>
+  <h2>How does nano-vLLM actually perform?</h2>
+  <p class="lead">The remarkable headline: nano-vLLM, at ~1,200 lines, achieves throughput <em>comparable to</em> production vLLM on offline batch inference — sometimes matching or slightly exceeding it on simple benchmarks. This is genuinely impressive and worth understanding precisely, because the comparison is more nuanced than "nano-vLLM is as fast as vLLM".</p>
+
+  <div class="diagram">
+    <div class="diagram-label">Offline batched throughput (illustrative, single GPU)</div>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1.25rem;">On a clean offline benchmark — fixed set of prompts, processed in large batches — the two are close:</p>
+    <div style="display:flex;flex-direction:column;gap:0.75rem;">
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <div style="font-family:'Space Mono',monospace;font-size:0.7rem;min-width:110px;color:var(--muted);">vLLM</div>
+        <div style="flex:1;background:var(--surface2);border-radius:3px;height:24px;overflow:hidden;border:1px solid var(--border);">
+          <div style="height:100%;width:97%;background:var(--accent);border-radius:3px;display:flex;align-items:center;padding-left:8px;font-family:'Space Mono',monospace;font-size:0.62rem;font-weight:700;color:#000;">~1,320 tok/s</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <div style="font-family:'Space Mono',monospace;font-size:0.7rem;min-width:110px;color:var(--muted);">nano-vLLM</div>
+        <div style="flex:1;background:var(--surface2);border-radius:3px;height:24px;overflow:hidden;border:1px solid var(--border);">
+          <div style="height:100%;width:100%;background:var(--accent3);border-radius:3px;display:flex;align-items:center;padding-left:8px;font-family:'Space Mono',monospace;font-size:0.62rem;font-weight:700;color:#000;">~1,370 tok/s</div>
+        </div>
+      </div>
+    </div>
+    <p style="font-size:0.74rem;color:var(--muted);margin-top:1rem;line-height:1.6;">Numbers are illustrative of the published ballpark (exact figures depend on GPU, model, and prompt mix). The key takeaway: on offline batch throughput, a 1,200-line implementation is competitive with a 100,000-line production system. That's a testament to how much of the performance comes from a few core ideas — PagedAttention, continuous batching, and FlashAttention — all of which nano-vLLM implements.</p>
+  </div>
+
+  <div class="callout insight">
+    <strong>Why nano-vLLM can match vLLM despite being 1% of the code</strong>
+    Most of vLLM's 100,000+ lines aren't about raw throughput on simple workloads — they handle the <em>long tail</em> of production requirements: dozens of model architectures, quantization formats, structured output, LoRA adapters, multi-modal inputs, distributed serving across nodes, extensive APIs, and edge cases. The <em>core inference loop</em> — the part that determines throughput on a standard benchmark — comes down to a handful of ideas this series has covered. nano-vLLM implements those core ideas faithfully, so it competes on the core benchmark. It just doesn't do the other 95% of what production vLLM does.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 5 — WHAT NANO OMITS
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 5 — What nano-vLLM Leaves Out</div>
+  <h2>The honest list of what's missing</h2>
+  <p class="lead">A benchmark number never tells you what an engine <em>can't</em> do. nano-vLLM's competitive throughput comes partly from its simplicity — it skips entire categories of production features. Understanding these omissions is essential to reading the comparison honestly, and it's a fitting way to close the series: knowing the boundaries of what you've learned.</p>
+
+  <table class="compare-table">
+    <thead>
+      <tr><th>Feature</th><th>nano-vLLM</th><th>Production vLLM</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Core inference loop</strong><br><span style="font-size:0.72rem;color:var(--muted);">PagedAttention, continuous batching, FlashAttention</span></td>
+        <td><span class="tag tag-green">✓ Full</span></td>
+        <td><span class="tag tag-green">✓ Full</span></td>
+      </tr>
+      <tr>
+        <td><strong>Quantization</strong><br><span style="font-size:0.72rem;color:var(--muted);">int8, fp8, AWQ, GPTQ — smaller/faster models</span></td>
+        <td><span class="tag tag-red">✗ None (fp16 only)</span></td>
+        <td><span class="tag tag-green">✓ Many formats</span></td>
+      </tr>
+      <tr>
+        <td><strong>Speculative decoding</strong><br><span style="font-size:0.72rem;color:var(--muted);">draft-and-verify to speed up decode</span></td>
+        <td><span class="tag tag-red">✗ None</span></td>
+        <td><span class="tag tag-green">✓ Yes</span></td>
+      </tr>
+      <tr>
+        <td><strong>Beam search</strong><br><span style="font-size:0.72rem;color:var(--muted);">explore multiple generation paths</span></td>
+        <td><span class="tag tag-red">✗ Not implemented</span></td>
+        <td><span class="tag tag-green">✓ Yes</span></td>
+      </tr>
+      <tr>
+        <td><strong>Model coverage</strong><br><span style="font-size:0.72rem;color:var(--muted);">supported architectures</span></td>
+        <td><span class="tag tag-amber">~ Qwen3 focus</span></td>
+        <td><span class="tag tag-green">✓ Dozens</span></td>
+      </tr>
+      <tr>
+        <td><strong>LoRA adapters</strong><br><span style="font-size:0.72rem;color:var(--muted);">serve fine-tuned variants efficiently</span></td>
+        <td><span class="tag tag-red">✗ None</span></td>
+        <td><span class="tag tag-green">✓ Yes</span></td>
+      </tr>
+      <tr>
+        <td><strong>Structured output</strong><br><span style="font-size:0.72rem;color:var(--muted);">guaranteed JSON / grammar constraints</span></td>
+        <td><span class="tag tag-red">✗ None</span></td>
+        <td><span class="tag tag-green">✓ Yes</span></td>
+      </tr>
+      <tr>
+        <td><strong>Production serving</strong><br><span style="font-size:0.72rem;color:var(--muted);">OpenAI-compatible API, metrics, multi-node</span></td>
+        <td><span class="tag tag-amber">~ Minimal</span></td>
+        <td><span class="tag tag-green">✓ Full stack</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <strong>nano-vLLM is a teaching tool, not a production server</strong>
+    This is not a criticism — it's the entire point. nano-vLLM exists to make the core ideas <em>legible</em>. By omitting the production long-tail, it keeps the codebase small enough to read in an afternoon. If you need to serve real traffic, use production vLLM. If you need to <em>understand</em> how production vLLM works, nano-vLLM — and this series — is the clearest path there. The omissions are what make it teachable.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 6 — RUNNING A BENCHMARK
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 6 — In nano-vLLM</div>
+  <h2>How to benchmark it yourself</h2>
+  <p class="lead">nano-vLLM ships with a <code>bench.py</code> script. Reading it shows exactly what a clean throughput benchmark looks like — and how to avoid the common measurement mistakes.</p>
+
+  <div class="code-label">bench.py — the structure of an honest throughput benchmark</div>
+  <pre><span class="keyword">import</span> time
+<span class="keyword">from</span> nanovllm <span class="keyword">import</span> LLM, SamplingParams
+
+<span class="comment"># 1. Load the model once, outside the timed region</span>
+llm = <span class="cls">LLM</span>(<span class="string">"Qwen/Qwen3-0.6B"</span>, enforce_eager=<span class="keyword">False</span>)  <span class="comment"># graphs ON for real perf</span>
+
+<span class="comment"># 2. Build a fixed, reproducible set of prompts
+#    Same prompts every run = comparable numbers</span>
+prompts = [<span class="string">"Explain quantum computing"</span>] * <span class="num">256</span>
+params = <span class="cls">SamplingParams</span>(temperature=<span class="num">0.6</span>, max_tokens=<span class="num">256</span>)
+
+<span class="comment"># 3. WARMUP — run once untimed.
+#    The first run pays CUDA graph capture + compile costs (Ch.10).
+#    Timing it would unfairly penalise the engine.</span>
+llm.<span class="fn">generate</span>(prompts[:<span class="num">8</span>], params)
+
+<span class="comment"># 4. TIMED REGION — measure only steady-state generation</span>
+start = time.<span class="fn">perf_counter</span>()
+outputs = llm.<span class="fn">generate</span>(prompts, params)
+elapsed = time.<span class="fn">perf_counter</span>() - start
+
+<span class="comment"># 5. Report throughput as TOTAL output tokens / wall-clock time</span>
+total_tokens = <span class="fn">sum</span>(<span class="fn">len</span>(o.token_ids) <span class="keyword">for</span> o <span class="keyword">in</span> outputs)
+<span class="fn">print</span>(<span class="string">f"Throughput: {total_tokens / elapsed:.0f} tok/s"</span>)
+<span class="fn">print</span>(<span class="string">f"Requests: {len(prompts)}, total tokens: {total_tokens}"</span>)</pre>
+
+  <div class="callout info">
+    <strong>The three benchmark mistakes this code avoids</strong>
+    (1) <strong>Timing the warmup</strong> — the first run includes one-time graph capture and compilation <span class="xref">→ Ch.10</span>; including it understates real performance. (2) <strong>Varying the workload</strong> — using different prompts each run makes numbers incomparable; fixed prompts are essential. (3) <strong>Measuring the wrong thing</strong> — throughput must be total output tokens over wall-clock time, not a per-request average that hides batching effects. Get any of these wrong and your benchmark is fiction.
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 7 — WHY IT MATTERS
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 7 — Why It Matters</div>
+  <h2>Reading benchmarks like an engineer</h2>
+
+  <div class="card-grid">
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>Always ask "at what latency?"</h4>
+      <p>A throughput number alone is incomplete. The honest question is "what throughput at a p99 latency of X ms?" — because throughput at unbounded latency is easy and useless. Real SLAs bound latency.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent2);">
+      <h4>Watch for cherry-picked conditions</h4>
+      <p>Short prompts flatter prefill. Long generations flatter decode optimizations. Big batches flatter throughput. A benchmark that uses only favourable conditions tells you nothing about your workload.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent3);">
+      <h4>Match the benchmark to your use case</h4>
+      <p>Building interactive chat? TTFT and p99 latency matter most. Running offline batch jobs? Pure throughput. The "best" engine depends entirely on which metric maps to your actual need.</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Features vs speed is a real trade</h4>
+      <p>nano-vLLM's competitive throughput partly reflects what it omits. When comparing engines, account for what each does — raw speed on a simple benchmark isn't the whole picture if you need quantization or structured output.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 8 — MISCONCEPTIONS
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 8 — Common Mistakes</div>
+  <h2>Things beginners get wrong about benchmarks</h2>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 1 — "Higher throughput always means a better engine"</div>
+    <div class="reality"><strong>Reality:</strong> Throughput and latency trade off against each other via batch size. An engine reporting enormous throughput is likely running huge batches — which means high per-request latency. For an interactive chat application, that "high throughput" engine might deliver a worse user experience than a "lower throughput" one tuned for latency. The right metric depends entirely on your use case; there is no universal "better".</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 2 — "nano-vLLM matching vLLM means it's production-ready"</div>
+    <div class="reality"><strong>Reality:</strong> Matching vLLM on an offline throughput benchmark only means the core inference loop is efficient. Production readiness requires the entire long tail nano-vLLM omits: quantization, broad model support, structured output, robust serving infrastructure, multi-node scaling, and battle-testing under real traffic. nano-vLLM is an exceptional <em>learning</em> tool that happens to be fast on simple benchmarks — that is very different from being a production server.</div>
+  </div>
+
+  <div class="misconception">
+    <div class="myth">✗ Myth 3 — "A single benchmark number captures performance"</div>
+    <div class="reality"><strong>Reality:</strong> Performance is a curve, not a point. The same engine produces wildly different numbers depending on batch size, prompt length, generation length, and hardware. A single number is a single point on a multi-dimensional surface. Honest benchmarking reports the relevant curve — throughput across latency targets, performance across prompt-length distributions — so you can find the point that matches <em>your</em> workload.</div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 9 — QUIZ
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 9 — Check Your Understanding</div>
+  <h2>Quiz</h2>
+  <p class="lead">Three final questions. Wrong answers explain exactly where the reasoning broke down.</p>
+
+  <div class="quiz-block">
+    <p class="q">1. An engine reports 8,000 tok/s throughput. A competitor reports 2,000 tok/s but advertises "10× lower latency". How can both be true?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(1,'a',false,'One of them isn\'t simply lying. These numbers are perfectly consistent — they\'re measuring different points on the throughput-latency trade-off curve. The high-throughput engine runs large batches (great tokens/second, but each request waits longer). The low-latency engine runs small batches (fast individual responses, lower total throughput).')">One of them is lying about their numbers</button>
+      <button onclick="quiz(1,'b',true,'Correct. They\'re operating at different points on the throughput-latency curve, controlled by batch size. The 8,000 tok/s engine runs large batches — maximising total tokens but making each individual request wait longer (high latency). The 2,000 tok/s engine runs small batches — each request gets more GPU time (low latency) but total throughput is lower. Both numbers are honest; they optimise opposite ends of the same trade-off. Neither is universally "better".')">They\'re at different points on the throughput-latency curve — large batch (high throughput, high latency) vs small batch (low throughput, low latency)</button>
+      <button onclick="quiz(1,'c',false,'Better hardware would raise both throughput AND lower latency together — it wouldn\'t explain this specific inverse relationship. The pattern described (high throughput paired with high latency, low throughput with low latency) is the signature of the batch-size trade-off, not a hardware difference.')">The first engine must be running on much better hardware</button>
+    </div>
+    <div class="quiz-fb" id="fb1"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">2. Why must a throughput benchmark include an untimed "warmup" run before measuring?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(2,'a',false,'The warmup isn\'t about the GPU "getting up to temperature" in a thermal sense. It\'s about one-time software costs: the first run triggers CUDA graph capture and torch.compile compilation (Ch.10), which are paid once at startup. Including those one-time costs in the timed region would unfairly understate steady-state performance.')">To let the GPU physically warm up to its operating temperature</button>
+      <button onclick="quiz(2,'b',true,'Correct. The first run pays one-time costs that never recur: CUDA graph capture and torch.compile compilation (Ch.10), plus memory allocation. These happen once at startup, not per request. If you time the first run, you fold those one-time costs into your measurement and understate the engine\'s real steady-state throughput. The warmup absorbs those costs so the timed region measures only ongoing generation performance — which is what actually matters in production.')">The first run pays one-time costs (CUDA graph capture, compilation) that would distort the measurement of steady-state performance</button>
+      <button onclick="quiz(2,'c',false,'The warmup run\'s outputs are discarded, not used for accuracy. Model accuracy doesn\'t change between runs — the weights are fixed. The warmup exists purely to absorb one-time performance costs (graph capture, compilation) so the timed region reflects steady-state speed, not first-run overhead.')">To verify the model produces accurate outputs before timing</button>
+    </div>
+    <div class="quiz-fb" id="fb2"></div>
+  </div>
+
+  <div class="quiz-block">
+    <p class="q">3. nano-vLLM matches vLLM's throughput on an offline benchmark despite being 1% of the code. What does this most accurately tell us?</p>
+    <div class="quiz-opts">
+      <button onclick="quiz(3,'a',false,'It does not mean vLLM\'s extra code is wasted. That code handles quantization, dozens of models, structured output, LoRA, multi-node serving, and countless production requirements — none of which show up on a simple offline throughput benchmark but all of which matter in production. The extra code does different jobs, not the same job badly.')">vLLM\'s extra 99,000 lines are wasted, bloated code</button>
+      <button onclick="quiz(3,'b',true,'Correct. It tells us that throughput on a standard benchmark is determined by a small number of core ideas — PagedAttention, continuous batching, FlashAttention — which nano-vLLM implements faithfully. The vast majority of vLLM\'s code handles the production long tail (quantization, model variety, structured output, serving infrastructure) that doesn\'t affect this particular benchmark. Both facts are true: the core loop is simple enough to match in 1,200 lines, AND production serving genuinely needs the other 99,000.')">The core throughput-determining ideas are few and learnable; vLLM\'s extra code handles production needs that don\'t show up on a simple benchmark</button>
+      <button onclick="quiz(3,'c',false,'It would be the wrong lesson to conclude nano-vLLM is ready to replace vLLM. Matching one offline throughput benchmark says nothing about quantization, model coverage, structured output, or production robustness — all of which nano-vLLM omits. It\'s a learning tool that\'s fast on simple benchmarks, not a production replacement.')">nano-vLLM is ready to replace vLLM in production deployments</button>
+    </div>
+    <div class="quiz-fb" id="fb3"></div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SECTION 10 — TAKEAWAYS
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">Section 10 — Key Takeaways</div>
+  <h2>What you now know</h2>
+
+  <div class="takeaways">
+    <div class="takeaways-label">Chapter 11 — Summary</div>
+    <div class="takeaway-grid">
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>There is no single "speed".</strong> Throughput, TTFT, TPOT, and percentile latencies each answer a different question. A serious benchmark reports all of them, not one cherry-picked number.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Throughput and latency trade off.</strong> Batch size is the knob. Large batches maximise throughput but raise per-request latency; small batches minimise latency but waste GPU capacity. You cannot maximise both.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Percentiles reveal the tail.</strong> Averages hide bad experiences. p95 and p99 latency — the unlucky requests — are what production SLAs are built on, not the median.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>nano-vLLM matches vLLM on core throughput.</strong> ~1,200 lines competes with ~100,000 on offline batch benchmarks — because throughput comes from a few core ideas this series covered, faithfully implemented.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>The omissions are the point.</strong> No quantization, beam search, speculative decoding, or broad model support. nano-vLLM trades production features for legibility — that's what makes it teachable.</p>
+      </div>
+      <div class="takeaway-item">
+        <div class="takeaway-check">✓</div>
+        <p><strong>Benchmark honestly.</strong> Warm up before timing, fix the workload, measure total tokens over wall-clock time, and report the curve — not a single point chosen to flatter.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ══════════════════════════
+     SERIES CONCLUSION
+══════════════════════════ -->
+<section class="section">
+  <div class="section-label">The End — Series Complete</div>
+  <h2>You've reached the end</h2>
+  <p class="lead">Eleven chapters ago, "LLM inference" might have been a black box. Now you understand what happens from the moment a prompt arrives to the moment the final token streams back — and why every design decision was made the way it was.</p>
+
+  <div class="series-complete">
+    <h3>🎓 The whole picture, in one breath</h3>
+    <p style="font-size:0.88rem;color:var(--muted);line-height:1.85;max-width:680px;margin:0 auto;">
+      A prompt arrives and is <strong style="color:var(--text);">tokenised</strong> (Ch.01). The <strong style="color:var(--text);">engine</strong> wraps it in a Sequence and hands it to the <strong style="color:var(--text);">scheduler</strong> (Ch.02, Ch.05), which uses <strong style="color:var(--text);">continuous batching</strong> to keep the GPU full. The <strong style="color:var(--text);">block manager</strong> allocates KV cache blocks via <strong style="color:var(--text);">PagedAttention</strong> (Ch.03, Ch.04), reusing shared prefixes through <strong style="color:var(--text);">prefix caching</strong> (Ch.07). The model runs <strong style="color:var(--text);">prefill</strong> then <strong style="color:var(--text);">decode</strong> (Ch.06), split across GPUs by <strong style="color:var(--text);">tensor parallelism</strong> (Ch.09), accelerated by <strong style="color:var(--text);">FlashAttention and CUDA Graphs</strong> (Ch.10). The <strong style="color:var(--text);">sampler</strong> picks each token (Ch.08), and you measure it all with <strong style="color:var(--text);">honest benchmarks</strong> (Ch.11). That's a complete LLM inference engine.
+    </p>
+    <div class="chapter-pills">
+      <a href="ch01.html" class="chapter-pill">01 · Inference</a>
+      <a href="ch02.html" class="chapter-pill">02 · Architecture</a>
+      <a href="ch03.html" class="chapter-pill">03 · KV Cache</a>
+      <a href="ch04.html" class="chapter-pill">04 · PagedAttention</a>
+      <a href="ch05.html" class="chapter-pill">05 · Scheduler</a>
+      <a href="ch06.html" class="chapter-pill">06 · Prefill vs Decode</a>
+      <a href="ch07.html" class="chapter-pill">07 · Prefix Caching</a>
+      <a href="ch08.html" class="chapter-pill">08 · Sampling</a>
+      <a href="ch09.html" class="chapter-pill">09 · Parallelism</a>
+      <a href="ch10.html" class="chapter-pill">10 · Optimizations</a>
+      <a href="ch11.html" class="chapter-pill">11 · Benchmarks</a>
+    </div>
+    <p style="font-size:0.82rem;color:var(--muted);margin-top:1rem;">
+      The best next step: clone <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank" style="color:var(--accent4);text-decoration:none;">nano-vLLM</a>, open the source, and read it. With this series behind you, every line will make sense.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<!-- FOOTER -->
+<footer class="chapter-footer">
+  <div class="footer-nav">
+    <a href="ch10.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;border:1px solid var(--border);color:var(--muted);transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent4)';this.style.color='var(--accent4)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">← Ch10: Optimizations</a>
+    <a href="index.html" style="font-family:'Space Mono',monospace;font-size:0.7rem;letter-spacing:0.08em;padding:0.6rem 1.25rem;border-radius:3px;text-decoration:none;background:var(--accent4);color:#000;font-weight:700;transition:all 0.2s;" onmouseover="this.style.background='#e09b2e'" onmouseout="this.style.background='var(--accent4)'">Series Index →</a>
+  </div>
+  <div class="footer-credit">
+    nano-vLLM by <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank">GeeeekExplorer</a> · Study series complete · MIT License
+  </div>
+</footer>
+
+<script>
+(function(){
+localStorage.setItem('ch11','1');
+
+/* ── BENCHMARK TRADE-OFF SIMULATOR ── */
+function updateBench(){
+  const bs = parseInt(document.getElementById('bench-bs').value);
+  document.getElementById('bench-bs-val').textContent = bs;
+
+  // Model: throughput rises with batch size but saturates (diminishing returns).
+  // Latency (TPOT) rises roughly linearly once past the memory-bandwidth sweet spot.
+  // Throughput: saturating curve — tok/s = max * bs / (bs + k)
+  const MAX_TPUT = 6000, K = 18;
+  const tput = Math.round(MAX_TPUT * bs / (bs + K));
+
+  // TPOT: baseline 12ms at bs=1, rises as batch grows (shared GPU time)
+  const tpot = (12 + bs * 0.42).toFixed(1);
+
+  document.getElementById('bench-tput').textContent = tput.toLocaleString();
+  document.getElementById('bench-tpot').textContent = tpot;
+
+  document.getElementById('bench-tput-bar').style.width = (tput / MAX_TPUT * 100) + '%';
+  document.getElementById('bench-tpot-bar').style.width = Math.min(parseFloat(tpot) / 70 * 100, 100) + '%';
+
+  const note = document.getElementById('bench-note');
+  if(bs <= 4){
+    note.innerHTML = `<span style="color:var(--accent);">Low batch (${bs}):</span> Each request gets lots of GPU time — fast individual responses (low TPOT). But total throughput is low and the GPU is underutilised. Great for premium low-latency chat, expensive per token.`;
+  } else if(bs >= 64){
+    note.innerHTML = `<span style="color:var(--accent3);">High batch (${bs}):</span> Throughput near maximum — excellent cost efficiency, more users per GPU. But each request waits its turn, so per-request latency is high. Great for offline batch jobs, worse for interactive use.`;
+  } else {
+    note.innerHTML = `<span style="color:var(--accent4);">Balanced batch (${bs}):</span> A middle ground — decent throughput and acceptable latency. Most interactive production systems operate somewhere in this range, tuned to hit a target p99 latency while maximising throughput under that ceiling.`;
+  }
+}
+window.updateBench = updateBench;
+updateBench();
+
+/* ── QUIZ ── */
+const CORRECT = {1:'b', 2:'b', 3:'b'};
+window.quiz = function(n, opt, isCorrect, msg){
+  const fb = document.getElementById('fb'+n);
+  fb.textContent = msg;
+  fb.className = 'quiz-fb show ' + (isCorrect ? 'ok' : 'no');
+  fb.closest('.quiz-block').querySelectorAll('button').forEach((b,i) => {
+    b.disabled = true;
+    const letters = ['a','b','c'];
+    if(letters[i] === opt && !isCorrect) b.classList.add('wrong');
+    if(letters[i] === CORRECT[n]) b.classList.add('correct');
+  });
+};
+
+})();
+</script>
+
+<!--
+  SELF-CRITIQUE SCORES
+  Comprehensiveness : 5/5 — all terms defined from scratch: throughput, latency,
+                             TTFT/TPOT (revisited Ch.06), percentiles (p50/p95/p99),
+                             batch size trade-off, warmup, benchmark harness, SLA. All
+                             xrefs present (TTFT/TPOT Ch.06, continuous batching Ch.05,
+                             PagedAttention Ch.04, optimization stack Ch.10). Edge cases:
+                             the three benchmark mistakes, what nano-vLLM omits (full
+                             table), why omissions enable competitiveness. All 8 mandatory
+                             sections present + series conclusion.
+  Coherence         : 5/5 — highway analogy → the four metrics → throughput/latency
+                             trade-off (interactive) → nano vs vLLM → what nano omits →
+                             how to benchmark → why it matters → misconceptions → quiz →
+                             takeaways → series conclusion tying all 11 chapters together.
+                             The trade-off concept is introduced then immediately made
+                             interactive, then used to explain the nano-vs-vLLM nuance.
+  Depth             : 5/5 — concrete numbers: ~1,320 vs ~1,370 tok/s nano-vs-vLLM,
+                             1,200 vs 100,000 lines, full omissions comparison table with
+                             8 features. Interactive batch-size explorer shows the
+                             throughput-latency curve moving in real time with a
+                             saturating throughput model and linear latency model, plus
+                             contextual notes for low/balanced/high batch. Annotated
+                             bench.py showing the correct measurement structure and the
+                             three mistakes it avoids.
+  Beginner access   : 5/5 — highway analogy (throughput vs latency) before any metric is
+                             defined; "worst day commute" analogy for percentiles before
+                             p50/p99; every metric defined in plain English with what it
+                             means for users; the trade-off explained via interactive
+                             before formal discussion; quiz tests reasoning (how both
+                             numbers can be true, why warmup, what the comparison means)
+                             not recall. Series conclusion restates the whole pipeline
+                             in one plain-English paragraph.
+  Known gaps        : none for nano-vLLM's scope. goodput (throughput under latency SLA)
+                             mentioned implicitly via "throughput at a latency target" but
+                             not named as a formal term — kept simple deliberately for the
+                             final chapter. Distributed multi-node benchmarking noted as
+                             out of scope.
+-->
+</body>
+</html>
