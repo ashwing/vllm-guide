@@ -344,7 +344,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179
         </div>
       </div>
     </div>
-    <p style="font-size:0.74rem;color:var(--muted);margin-top:1rem;line-height:1.6;">Numbers are illustrative of the published ballpark (exact figures depend on GPU, model, and prompt mix). The key takeaway: on offline batch throughput, a 1,200-line implementation is competitive with a 100,000-line production system. That's a testament to how much of the performance comes from a few core ideas — PagedAttention, continuous batching, and FlashAttention — all of which nano-vLLM implements.</p>
+    <p style="font-size:0.74rem;color:var(--muted);margin-top:1rem;line-height:1.6;">These are illustrative approximations to show nano-vLLM is in the same ballpark as production vLLM for the subset of features it implements — not a rigorous apples-to-apples benchmark. Exact figures vary significantly by GPU, model size, batch size, and prompt mix. The key takeaway: on offline batch throughput, a 1,200-line implementation is competitive with a 100,000-line production system. That's a testament to how much of the performance comes from a few core ideas — PagedAttention, continuous batching, and FlashAttention — all of which nano-vLLM implements.</p>
   </div>
 
   <div class="callout insight">
@@ -456,7 +456,7 @@ total_tokens = <span class="fn">sum</span>(<span class="fn">len</span>(o.token_i
 
   <div class="callout info">
     <strong>The three benchmark mistakes this code avoids</strong>
-    (1) <strong>Timing the warmup</strong> — the first run includes one-time graph capture and compilation <span class="xref">→ Ch.10</span>; including it understates real performance. (2) <strong>Varying the workload</strong> — using different prompts each run makes numbers incomparable; fixed prompts are essential. (3) <strong>Measuring the wrong thing</strong> — throughput must be total output tokens over wall-clock time, not a per-request average that hides batching effects. Get any of these wrong and your benchmark is fiction.
+    (1) <strong>Timing the warmup</strong> — the first run includes one-time graph capture and compilation <span class="xref">→ Ch.10</span>; including it understates real performance. Note: this benchmarking warmup differs from Chapter 10's graph-capture warmup — here we're absorbing all one-time costs (compilation, memory allocation, graph capture) so the timed region reflects steady-state throughput only. (2) <strong>Varying the workload</strong> — using different prompts each run makes numbers incomparable; fixed prompts are essential. (3) <strong>Measuring the wrong thing</strong> — throughput must be total output tokens over wall-clock time, not a per-request average that hides batching effects. Get any of these wrong and your benchmark is fiction.
   </div>
 </section>
 

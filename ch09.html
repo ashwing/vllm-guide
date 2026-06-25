@@ -328,7 +328,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,77,
     Four people each counted attendees at different doors of an event. Each knows only their own door's count. To get the total, they do an all-reduce: each announces their number, everyone adds them up, and everyone writes down the same grand total. The "reduce" is the addition; the "all" is that everyone — not just the organiser — ends up knowing the total. In tensor parallelism, the partial sums are partial output vectors, and after all-reduce every GPU has the identical complete output, ready for the next layer.
   </div>
 
-  <p class="lead">All-reduce is implemented by a library called <strong style="color:var(--text)">NCCL</strong> (NVIDIA Collective Communications Library, pronounced "nickel"). It uses the high-speed interconnect between GPUs — NVLink — to exchange data far faster than going through the CPU or system memory. But it's still vastly slower than on-GPU compute. Every all-reduce is a synchronisation point where GPUs wait for each other. This is why minimising all-reduces matters so much.</p>
+  <p class="lead">All-reduce is implemented by a library called <strong style="color:var(--text)">NCCL</strong> (NVIDIA Collective Communications Library, pronounced "nickel"). It uses the high-speed interconnect between GPUs — primarily NVLink where available, falling back to PCIe otherwise. NVLink provides 5–12× higher bandwidth than PCIe, which is why tensor parallelism works best on NVLink-equipped systems. But even NVLink is vastly slower than on-GPU compute. Every all-reduce is a synchronisation point where GPUs wait for each other. This is why minimising all-reduces matters so much.</p>
 
   <div class="callout danger">
     <strong>Why communication is the enemy of parallelism</strong>
@@ -488,7 +488,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,77,
 
   <div class="callout insight">
     <strong>Attention heads split across GPUs for free</strong>
-    Remember from Chapter 03 that attention has multiple independent heads <span class="xref">→ Ch.03</span>. Tensor parallelism exploits this beautifully: each GPU simply handles a subset of the heads. With 16 heads across 4 GPUs, each GPU computes 4 heads entirely on its own — no communication during attention itself. The heads are independent by design, so splitting them needs no coordination until the output projection's single all-reduce.
+    Remember from Chapter 03 that attention has multiple independent heads <span class="xref">→ Ch.03</span>. Tensor parallelism exploits this beautifully: each GPU simply handles a subset of the heads. With 32 heads across 4 GPUs, each GPU computes 8 heads entirely on its own — no communication during attention itself. The heads are independent by design, so splitting them needs no coordination until the output projection's single all-reduce. The only requirement is that the number of heads must be evenly divisible by the tensor parallelism degree (e.g., 32 heads ÷ 4 GPUs = 8 heads each).
   </div>
 </section>
 

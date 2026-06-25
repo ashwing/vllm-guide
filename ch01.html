@@ -311,6 +311,11 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,2
     </div>
   </div>
 
+  <div class="callout info">
+    <strong>How does the model know word order?</strong>
+    Tokens are integers, but "hello" at position 3 and "hello" at position 100 must mean different things in context. <em>Positional encodings</em> are added to each token's embedding so the model knows where in the sequence each token sits. Without this, the model would treat every occurrence of the same word identically regardless of position — making language comprehension impossible.
+  </div>
+
   <div class="callout warn">
     <strong>Token count matters for cost and speed</strong>
     When an API charges "per token" or says "128k context limit", they mean this. 1 page of text ≈ 500 tokens. A full novel ≈ 100,000 tokens. Every token requires a full forward pass during decode. More tokens = more computation = more time and money. nano-vLLM's entire job is to process as many tokens as possible, as fast as possible, on as little GPU memory as possible.
@@ -425,7 +430,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,2
 <section class="section">
   <div class="section-label">Section 5 — Generation Loop</div>
   <h2>Autoregressive generation</h2>
-  <p class="lead">The single most important thing to internalise: the model <strong style="color:var(--text)">cannot see the future</strong>. It generates one token, appends it to the context, then generates the next — based on everything including what it just wrote. This is called <em>autoregressive</em> generation.</p>
+  <p class="lead">The single most important thing to internalise: the model <strong style="color:var(--text)">cannot see the future</strong>. It generates one token, appends it to the context, then generates the next — based on everything including what it just wrote. This is called <em>autoregressive</em> generation. It's enforced by <em>causal masking</em> in the attention layer — each token can only attend to tokens that came before it, never future tokens.</p>
 
   <div class="diagram">
     <div class="diagram-label">Watch a sentence build — one token at a time</div>

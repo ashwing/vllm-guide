@@ -530,6 +530,11 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179
     <div class="myth">✗ Myth 3 — "You should always use top-k and top-p together at aggressive settings"</div>
     <div class="reality"><strong>Reality:</strong> Stacking aggressive top-k and top-p can over-constrain the output, making it repetitive and bland — you've removed so many options that only the safest tokens survive. Most production systems use <em>one</em> truncation method, not both: typically top-p 0.9–0.95 alone, with top-k disabled (set to 0). Top-p's adaptive nature usually makes it the better single choice. Use top-k mainly when you want a hard guarantee on the maximum number of candidates.</div>
   </div>
+
+  <div class="callout info">
+    <strong>Beyond nano-vLLM's sampler</strong>
+    Production inference systems also implement <em>repetition penalty</em> and <em>frequency/presence penalty</em> — these modify logits based on what's already been generated, discouraging the model from repeating itself. Beam search is another fundamentally different decoding strategy that explores multiple candidate sequences in parallel. nano-vLLM omits these for simplicity, focusing on the core temperature/top-k/top-p pipeline that all other strategies build upon.
+  </div>
 </section>
 
 <div class="divider"></div>

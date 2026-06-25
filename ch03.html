@@ -351,7 +351,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(0,229,2
 
   <div class="callout warn">
     <strong>This is why the KV cache gets so large</strong>
-    Each token must store K and V for <em>every head in every layer</em>. A 70B model with 80 layers and 64 heads per layer (MHA) caches 80 × 64 × 2 = 10,240 vectors per token. At head_dim=128 and fp16: 10,240 × 128 × 2 = 2.6 MB per token. A 4,000-token conversation needs 10.4 GB just for the KV cache — before the model weights even come into the picture.
+    Each token must store K and V for <em>every head in every layer</em>. A 70B model with 80 layers and 64 heads per layer (MHA) caches 80 × 64 × 2 = 10,240 vectors per token. At head_dim=128 and fp16: 10,240 × 128 × 2 = 2.6 MB per token. A 4,000-token conversation needs 10.4 GB just for the KV cache — before the model weights even come into the picture. These calculations assume fp16 precision (2 bytes per value). fp32 doubles the cost; int8 quantization halves it. Precision choice is a key production decision — nano-vLLM uses fp16 throughout.
   </div>
 
   <h3>Grouped Query Attention — shrinking the cache</h3>

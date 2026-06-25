@@ -296,6 +296,11 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255
     <strong>Why CUDA Graphs need fixed shapes — and why decode is perfect for them</strong>
     A captured graph is rigid: it records exact memory addresses and tensor shapes. It can only be replayed for inputs of the identical shape. This makes it unsuitable for prefill (where prompt lengths vary constantly) but ideal for decode — every decode step processes exactly one token per sequence, a fixed, predictable shape. This is why nano-vLLM captures CUDA Graphs for the decode path specifically, and runs prefill in normal "eager" mode. It's also why the GPU data plane being stateless and predictable <span class="xref">→ Ch.02</span> matters so much — predictability is what makes graph capture possible.
   </div>
+
+  <div class="callout info">
+    <strong>CUDA Graphs with tensor parallelism</strong>
+    When using tensor parallelism <span class="xref">→ Ch.09</span>, each GPU captures its own CUDA graph independently — covering its local slice of the computation. The all-reduce communication between GPUs still happens between graph replays. This means the two optimizations compose cleanly: you get zero-overhead kernel launches within each GPU, with synchronisation only at the all-reduce boundaries.
+  </div>
 </section>
 
 <div class="divider"></div>
@@ -306,14 +311,14 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255
 <section class="section">
   <div class="section-label">Section 5 — Optimization 4: torch.compile</div>
   <h2>torch.compile — let the compiler optimise</h2>
-  <p class="lead"><strong style="color:var(--text)">torch.compile</strong> is PyTorch's optimising compiler. Normally PyTorch runs in "eager mode" — each operation executes immediately, one Python line at a time, exactly as written. torch.compile instead analyses your whole model ahead of time, then automatically applies optimizations like kernel fusion <span class="xref">→ Ch.03</span>, removing redundant operations, and generating efficient fused GPU code — often via Triton.</p>
+  <p class="lead"><strong style="color:var(--text)">torch.compile</strong> (requires PyTorch 2.0+) is PyTorch's optimising compiler. Normally PyTorch runs in "eager mode" — each operation executes immediately, one Python line at a time, exactly as written. torch.compile instead analyses your whole model ahead of time using its default "inductor" backend, then automatically applies optimizations like kernel fusion <span class="xref">→ Ch.03</span>, removing redundant operations, and generating efficient fused GPU code — often via Triton.</p>
 
   <div class="callout insight">
     <strong>The Translator Analogy</strong>
     Eager mode is like a live interpreter translating a speech sentence-by-sentence — flexible, but they can't optimise across sentences because they only see one at a time. torch.compile is like giving a translator the entire speech in advance: now they can restructure for flow, merge redundant phrases, and produce a far more polished result, because they can see the whole thing at once. torch.compile sees your whole model graph and optimises across operations that eager mode must treat in isolation.
   </div>
 
-  <p class="lead">The trade-off: torch.compile spends time compiling on the first run (the "warmup"), which can take seconds to minutes. But every run after that is faster. For a long-running inference server that starts once and serves millions of requests, paying a one-time compile cost for permanent speedup is an excellent trade. It also composes with the other techniques — torch.compile can automatically generate fused kernels and works alongside CUDA Graphs.</p>
+  <p class="lead">The trade-off: torch.compile spends time compiling on the first run (the "warmup") — typically 10–30 seconds for a model the size of nano-vLLM, though larger models can take minutes. But every run after that is faster. For a long-running inference server that starts once and serves millions of requests, paying a one-time compile cost for permanent speedup is an excellent trade. It also composes with the other techniques — torch.compile can automatically generate fused kernels and works alongside CUDA Graphs.</p>
 </section>
 
 <div class="divider"></div>
@@ -495,7 +500,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255
 
   <div class="misconception">
     <div class="myth">✗ Myth 1 — "FlashAttention changes the math / approximates attention"</div>
-    <div class="reality"><strong>Reality:</strong> FlashAttention is mathematically <em>exact</em> — it produces bit-for-bit (within floating-point rounding) the same result as naive attention. It is not an approximation. It only changes <em>how</em> the computation is organised in memory (tiling, running softmax) to avoid writing the giant intermediate matrix to HBM. The output is identical; only the memory access pattern changes. This is what makes it a free win — speed with no quality cost.</div>
+    <div class="reality"><strong>Reality:</strong> FlashAttention v2 is mathematically <em>exact</em> — it produces the same result as naive attention (within floating-point rounding). It is not an approximation. It only changes <em>how</em> the computation is organised in memory (tiling, running softmax) to avoid writing the giant intermediate matrix to HBM. The output is identical; only the memory access pattern changes. Newer versions (v3) may produce slight numeric differences due to algorithmic reordering, but these are imperceptible in practice. This is what makes FlashAttention a free win — speed with no quality cost.</div>
   </div>
 
   <div class="misconception">

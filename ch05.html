@@ -472,6 +472,11 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179
       <p>The best preemption is the one that never happens. nano-vLLM's scheduler is conservative: it won't promote a waiting request if doing so would leave fewer free blocks than the expected decode length. This is imperfect (decode length is unknown) but keeps preemption rare.</p>
     </div>
   </div>
+
+  <div class="callout info">
+    <strong>Fairness and starvation</strong>
+    The waiting queue is strictly FIFO — requests are served in arrival order. Combined with the LIFO preemption policy (newest evicted first), this protects long-running requests: older sequences that have already invested significant compute are the last to be evicted and the first to be re-scheduled. This means no request can be starved indefinitely — it advances in queue priority with every scheduling round.
+  </div>
 </section>
 
 <div class="divider"></div>

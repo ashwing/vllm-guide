@@ -363,7 +363,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255
 
   <div class="diagram">
     <div class="diagram-label">Latency breakdown — example: 200-token prompt, 100-token response</div>
-    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1.25rem;">Drag the sliders to see how prompt length, response length, and model size affect TTFT and total time:</p>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1.25rem;">Drag the sliders to see how prompt length, response length, and model size affect TTFT and total time. <span style="font-size:0.72rem;color:var(--muted);font-style:italic;">(Estimates assume a single H100 GPU, fp16 precision, no batching — illustrative only.)</span></p>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem;">
       <div>
@@ -505,6 +505,11 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(180,255
 
   <h3>What is chunked prefill?</h3>
   <p class="lead">Instead of processing the entire prompt in one massive forward pass, chunked prefill splits the prompt into smaller chunks — say, 512 tokens at a time. After each chunk is processed, decode steps for existing sequences can be interleaved. The prompt is still fully processed before the new request generates any tokens, but other requests already in DECODING state keep generating throughout.</p>
+
+  <div class="callout insight">
+    <strong>Why prefill can be chunked but decode cannot</strong>
+    Prefill is chunkable because each chunk produces independent KV data — tokens 0–511 generate the same K and V regardless of whether tokens 512–1023 are processed in the same batch or a later one. Decode cannot be chunked the same way because each new token causally depends on the previous one: you can't generate token N+1 until token N exists in the KV cache.
+  </div>
 
   <div class="step-row">
     <div class="step-badge" style="background:rgba(255,77,109,0.15);border:1px solid rgba(255,77,109,0.4);color:var(--accent2);">❌</div>
