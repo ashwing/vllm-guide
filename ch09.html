@@ -519,6 +519,29 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,77,
       <p>For truly massive models, tensor parallelism combines with pipeline parallelism (layers across nodes) and data parallelism (replicas for throughput). Production systems layer all three. nano-vLLM focuses on tensor parallelism as the foundational one.</p>
     </div>
   </div>
+
+  <h3>When to use tensor parallelism vs pipeline parallelism</h3>
+  <p class="lead">Both split a model across GPUs, but they make fundamentally different trade-offs. Choosing correctly depends on your hardware topology and latency requirements.</p>
+
+  <div class="card-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="card" style="--card-accent:var(--accent);">
+      <h4>Tensor Parallelism (TP)</h4>
+      <p><strong style="color:var(--text);">Splits each layer</strong> across GPUs. All GPUs work on the same token simultaneously.</p>
+      <p style="margin-top:0.5rem;"><strong style="color:var(--accent);">Choose when:</strong></p>
+      <p>• GPUs are connected by NVLink (within one node)<br>• Latency matters more than throughput<br>• Batch sizes are small to medium<br>• You want lower per-request latency</p>
+    </div>
+    <div class="card" style="--card-accent:var(--accent4);">
+      <h4>Pipeline Parallelism (PP)</h4>
+      <p><strong style="color:var(--text);">Splits layers into stages</strong> across GPUs. Different GPUs work on different micro-batches.</p>
+      <p style="margin-top:0.5rem;"><strong style="color:var(--accent4);">Choose when:</strong></p>
+      <p>• GPUs are connected by PCIe or network (across nodes)<br>• Throughput matters more than per-request latency<br>• Batch sizes are large (fills the pipeline)<br>• Communication bandwidth is limited</p>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>The hybrid approach</strong>
+    Production systems serving 100B+ models typically combine both: tensor parallelism within each node (using fast NVLink between 8 GPUs) and pipeline parallelism across nodes (using slower network interconnects). For example, a 4-node cluster with 8 GPUs each might use TP=8 within each node and PP=4 across nodes, giving 32 GPUs total. nano-vLLM implements TP only, which covers the most common single-node deployment scenario.
+  </div>
 </section>
 
 <div class="divider"></div>

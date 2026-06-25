@@ -238,7 +238,7 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179
     <div class="step-badge" style="background:rgba(180,255,111,0.15);border:1px solid rgba(180,255,111,0.4);color:var(--accent3);">4</div>
     <div>
       <h4>Percentiles — p50, p95, p99 latency</h4>
-      <p>Averages hide bad experiences. <strong style="color:var(--text)">Percentiles</strong> tell the full story: p50 (median) is the typical case; p99 is the worst 1% — the unlucky requests that waited longest. A system with great average latency but terrible p99 means 1 in 100 users has an awful experience. Production systems are judged on p95 and p99, not just averages.</p>
+      <p>Averages hide bad experiences. <strong style="color:var(--text)">Percentiles</strong> tell the full story: p50 (median) is the typical case; p99 is the worst 1% — the unlucky requests that waited longest. A system with great average latency but terrible p99 means 1 in 100 users has an awful experience. Production systems are judged on p95 and p99, not just averages. Percentiles are computed across all requests in a benchmark window — p99 means the slowest 1% of requests experienced this latency or worse.</p>
     </div>
   </div>
 
@@ -365,48 +365,56 @@ code{font-family:'Space Mono',monospace;font-size:0.82em;background:rgba(255,179
 
   <table class="compare-table">
     <thead>
-      <tr><th>Feature</th><th>nano-vLLM</th><th>Production vLLM</th></tr>
+      <tr><th>Feature</th><th>nano-vLLM</th><th>Production vLLM</th><th>Effort to add</th></tr>
     </thead>
     <tbody>
       <tr>
         <td><strong>Core inference loop</strong><br><span style="font-size:0.72rem;color:var(--muted);">PagedAttention, continuous batching, FlashAttention</span></td>
         <td><span class="tag tag-green">✓ Full</span></td>
         <td><span class="tag tag-green">✓ Full</span></td>
+        <td><span style="font-size:0.72rem;color:var(--muted);">—</span></td>
       </tr>
       <tr>
         <td><strong>Quantization</strong><br><span style="font-size:0.72rem;color:var(--muted);">int8, fp8, AWQ, GPTQ — smaller/faster models</span></td>
         <td><span class="tag tag-red">✗ None (fp16 only)</span></td>
         <td><span class="tag tag-green">✓ Many formats</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent2);">Hard (months)</span></td>
       </tr>
       <tr>
         <td><strong>Speculative decoding</strong><br><span style="font-size:0.72rem;color:var(--muted);">draft-and-verify to speed up decode</span></td>
         <td><span class="tag tag-red">✗ None</span></td>
         <td><span class="tag tag-green">✓ Yes</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent2);">Hard (months)</span></td>
       </tr>
       <tr>
         <td><strong>Beam search</strong><br><span style="font-size:0.72rem;color:var(--muted);">explore multiple generation paths</span></td>
         <td><span class="tag tag-red">✗ Not implemented</span></td>
         <td><span class="tag tag-green">✓ Yes</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent4);">Moderate (weeks)</span></td>
       </tr>
       <tr>
         <td><strong>Model coverage</strong><br><span style="font-size:0.72rem;color:var(--muted);">supported architectures</span></td>
         <td><span class="tag tag-amber">~ Qwen3 focus</span></td>
         <td><span class="tag tag-green">✓ Dozens</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent4);">Moderate (per model)</span></td>
       </tr>
       <tr>
         <td><strong>LoRA adapters</strong><br><span style="font-size:0.72rem;color:var(--muted);">serve fine-tuned variants efficiently</span></td>
         <td><span class="tag tag-red">✗ None</span></td>
         <td><span class="tag tag-green">✓ Yes</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent2);">Hard (months)</span></td>
       </tr>
       <tr>
         <td><strong>Structured output</strong><br><span style="font-size:0.72rem;color:var(--muted);">guaranteed JSON / grammar constraints</span></td>
         <td><span class="tag tag-red">✗ None</span></td>
         <td><span class="tag tag-green">✓ Yes</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent4);">Moderate (weeks)</span></td>
       </tr>
       <tr>
         <td><strong>Production serving</strong><br><span style="font-size:0.72rem;color:var(--muted);">OpenAI-compatible API, metrics, multi-node</span></td>
         <td><span class="tag tag-amber">~ Minimal</span></td>
         <td><span class="tag tag-green">✓ Full stack</span></td>
+        <td><span style="font-size:0.72rem;color:var(--accent3);">Easy (days)</span></td>
       </tr>
     </tbody>
   </table>
@@ -623,6 +631,21 @@ total_tokens = <span class="fn">sum</span>(<span class="fn">len</span>(o.token_i
       <a href="ch10.html" class="chapter-pill">10 · Optimizations</a>
       <a href="ch11.html" class="chapter-pill">11 · Benchmarks</a>
     </div>
+    <h3 style="margin-top:2rem;font-family:'Syne',sans-serif;font-weight:700;font-size:0.95rem;">Five systems, one engine</h3>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem;">The index page promised you'd learn five interacting systems. Here's where each lives:</p>
+    <table class="compare-table" style="font-size:0.78rem;">
+      <thead>
+        <tr><th>System</th><th>Chapters</th><th>Core idea</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Inference fundamentals</strong></td><td>01–02</td><td>Tokens, autoregressive generation, the 6-step pipeline, architecture</td></tr>
+        <tr><td><strong>KV cache & memory</strong></td><td>03–04</td><td>Physical layout, Triton kernels, PagedAttention, block tables</td></tr>
+        <tr><td><strong>Scheduling & batching</strong></td><td>05–06</td><td>Continuous batching, prefill vs decode, preemption, chunked prefill</td></tr>
+        <tr><td><strong>Caching & sampling</strong></td><td>07–08</td><td>Prefix caching, xxhash blocks, temperature/top-k/top-p</td></tr>
+        <tr><td><strong>Distributed compute & performance</strong></td><td>09–11</td><td>Tensor parallelism, FlashAttention, CUDA Graphs, benchmarks</td></tr>
+      </tbody>
+    </table>
+
     <p style="font-size:0.82rem;color:var(--muted);margin-top:1rem;">
       The best next step: clone <a href="https://github.com/GeeeekExplorer/nano-vllm" target="_blank" style="color:var(--accent4);text-decoration:none;">nano-vLLM</a>, open the source, and read it. With this series behind you, every line will make sense.
     </p>
